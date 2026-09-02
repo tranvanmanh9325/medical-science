@@ -22,3 +22,19 @@ checkpoints/
 # OS Specific
 .DS_Store
 Thumbs.db
+
+# Python Packaging & Build Artifacts
+*.egg-info/
+*.egg
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+parts/
+var/
+sdist/
+wheels/
+*.manifest
+*.spec

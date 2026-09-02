@@ -1,9 +1,9 @@
-# torch==1.12.0
-# torchaudio==0.12.0
-# torchvision==0.13.0
-transformers==4.5.1
-wandb==0.9.1
-packaging==21.3
-colorlog==6.8.0
-termcolor==2.4.0
-mpi4py==3.1.5
+# torch>=2.0.0
+# torchaudio>=2.0.0
+# torchvision>=0.15.0
+transformers>=4.48.0
+wandb>=0.15.0
+packaging>=21.3
+colorlog>=6.8.0
+termcolor>=2.4.0
+mpi4py>=3.1.5

@@ -35,8 +35,6 @@ if __name__ == '__main__':
         extras_require={
             # optional dependencies, required by evaluation, test, etc.
             "all": [
-                "tensorflow-gpu==1.14",
-                "baselines",
                 "mpi4py",  # important for ddpg
                 "ipython",
                 "jupyter",

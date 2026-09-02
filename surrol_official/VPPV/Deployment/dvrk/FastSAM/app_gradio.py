@@ -192,12 +192,12 @@ segm_img_t = gr.Image(label="Segmented Image with text", interactive=False, type
 global_points = []
 global_point_label = []
 
-input_size_slider = gr.components.Slider(minimum=512,
-                                         maximum=1024,
-                                         value=1024,
-                                         step=64,
-                                         label='Input_size',
-                                         info='Our model was trained on a size of 1024')
+input_size_slider = gr.Slider(minimum=512,
+                               maximum=1024,
+                               value=1024,
+                               step=64,
+                               label='Input_size',
+                               info='Our model was trained on a size of 1024')
 
 with gr.Blocks(css=css, title='Fast Segment Anything') as demo:
     with gr.Row():
@@ -311,12 +311,12 @@ with gr.Blocks(css=css, title='Fast Segment Anything') as demo:
         # Submit & Clear
         with gr.Row():
             with gr.Column():
-                input_size_slider_t = gr.components.Slider(minimum=512,
-                                                           maximum=1024,
-                                                           value=1024,
-                                                           step=64,
-                                                           label='Input_size',
-                                                           info='Our model was trained on a size of 1024')
+                input_size_slider_t = gr.Slider(minimum=512,
+                                                   maximum=1024,
+                                                   value=1024,
+                                                   step=64,
+                                                   label='Input_size',
+                                                   info='Our model was trained on a size of 1024')
                 with gr.Row():
                     with gr.Column():
                         contour_check = gr.Checkbox(value=True, label='withContours', info='draw the edges of the masks')
