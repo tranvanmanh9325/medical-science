@@ -829,35 +829,14 @@ class BlenderMuJoCoViewer:
             elif key == glfw.KEY_F:
                 self.inject_perturbation(fx=120.0, fy=100.0)
 
-            # Phím F1 - F8 bật/tắt các lớp phủ đo lường 3D
-            elif key == glfw.KEY_F1:
-                self.layer_com = not self.layer_com
-                print(f"[LỚP PHỦ] Trọng tâm CoM: {self.layer_com}")
-            elif key == glfw.KEY_F2:
-                self.layer_grf = not self.layer_grf
-                print(f"[LỚP PHỦ] Mũi tên lực chân GRF: {self.layer_grf}")
-            elif key == glfw.KEY_F3:
-                self.layer_zmp = not self.layer_zmp
-                print(f"[LỚP PHỦ] Đa giác thăng bằng & Điểm ZMP: {self.layer_zmp}")
-            elif key == glfw.KEY_F4:
-                self.layer_skeleton = not self.layer_skeleton
-                print(f"[LỚP PHỦ] Hệ trục khớp: {self.layer_skeleton}")
-            elif key == glfw.KEY_F5:
-                self.layer_trajectory = not self.layer_trajectory
-                print(f"[LỚP PHỦ] Vệt quỹ đạo di chuyển: {self.layer_trajectory}")
-            elif key == glfw.KEY_F6:
-                self.layer_metric_grid = not self.layer_metric_grid
-                print(f"[LỚP PHỦ] Lưới đo mét: {self.layer_metric_grid}")
-            elif key == glfw.KEY_F7:
-                self.layer_collision = not self.layer_collision
-                self.opt.flags[mujoco.mjtVisFlag.mjVIS_COLLISION] = int(self.layer_collision)
-                print(f"[LỚP PHỦ] Khối va chạm: {self.layer_collision}")
+            # Đổi chế độ nền sáng / tối
             elif key == glfw.KEY_F8:
                 self.theme_academic = not self.theme_academic
                 print(f"[CHẾ ĐỘ NỀN] Nền sáng bài báo: {self.theme_academic}")
 
             # Chụp ảnh báo cáo nghiên cứu
             elif key == glfw.KEY_P:
+
                 self._capture_scientific_snapshot()
 
             # Phím Numpad đổi góc nhìn chuẩn Blender
@@ -897,93 +876,12 @@ class BlenderMuJoCoViewer:
             self.cam.elevation = self.anim_start_el + (self.anim_target_el - self.anim_start_el) * ease
 
     # ==========================================================================
-    # 5. CÁC LỚP PHỦ 3D ĐO LƯỜNG VẬT LÝ TRONG KHÔNG GIAN
+    # 5. CÁC HIỆU ỨNG VẬT LÝ 3D (CHỈ GIỮ MŨI TÊN LỰC ĐẨY KHI THỰC NGHIỆM)
     # ==========================================================================
     def _inject_3d_scientific_overlays(self, telem):
         scn = self.scn
 
-        # 1. Trọng tâm toàn thân CoM
-        if self.layer_com:
-            com = telem['com']
-            if scn.ngeom < scn.maxgeom:
-                g = scn.geoms[scn.ngeom]
-                mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_SPHERE, np.array([0.045, 0.045, 0.045]), com, np.eye(3).flatten(), np.array([0.0, 0.94, 1.0, 0.92]))
-                g.category = mujoco.mjtCatBit.mjCAT_DECOR
-                scn.ngeom += 1
-
-            # Đường dọi trọng lực xuống sàn
-            if scn.ngeom < scn.maxgeom:
-                g = scn.geoms[scn.ngeom]
-                mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_CAPSULE, np.zeros(3), np.zeros(3), np.eye(3).flatten(), np.array([0.0, 0.94, 1.0, 0.45]))
-                mujoco.mjv_connector(g, mujoco.mjtGeom.mjGEOM_CAPSULE, 0.006, com, np.array([com[0], com[1], 0.002]))
-                g.category = mujoco.mjtCatBit.mjCAT_DECOR
-                scn.ngeom += 1
-
-            # Điểm bóng tiếp đất trọng tâm
-            if scn.ngeom < scn.maxgeom:
-                g = scn.geoms[scn.ngeom]
-                mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_CYLINDER, np.array([0.08, 0.002, 0.002]), np.array([com[0], com[1], 0.001]), np.eye(3).flatten(), np.array([0.0, 0.8, 1.0, 0.35]))
-                g.category = mujoco.mjtCatBit.mjCAT_DECOR
-                scn.ngeom += 1
-
-            # Véc-tơ vận tốc trọng tâm
-            v_norm = np.linalg.norm(telem['com_vel'])
-            if v_norm > 0.05 and scn.ngeom < scn.maxgeom:
-                v_end = com + telem['com_vel'] * 0.4
-                g = scn.geoms[scn.ngeom]
-                mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_ARROW, np.zeros(3), np.zeros(3), np.eye(3).flatten(), np.array([0.0, 1.0, 0.5, 0.95]))
-                mujoco.mjv_connector(g, mujoco.mjtGeom.mjGEOM_ARROW, 0.015, com, v_end)
-                g.category = mujoco.mjtCatBit.mjCAT_DECOR
-                scn.ngeom += 1
-
-        # 2. Véc-tơ lực tiếp xúc mặt đất (GRF)
-        if self.layer_grf:
-            for c in telem['contacts']:
-                if c['mag'] > 5.0 and scn.ngeom < scn.maxgeom:
-                    pos = c['pos']
-                    f_vec = c['force']
-                    arrow_len = min(0.65, max(0.08, c['mag'] * 0.00065))
-                    f_dir = f_vec / (c['mag'] + 1e-6)
-                    target = pos + f_dir * arrow_len
-
-                    if c['mag'] < 300:
-                        rgba = np.array([0.0, 0.94, 1.0, 0.90])
-                    elif c['mag'] < 650:
-                        rgba = np.array([0.0, 1.0, 0.45, 0.95])
-                    elif c['mag'] < 950:
-                        rgba = np.array([1.0, 0.75, 0.0, 0.95])
-                    else:
-                        rgba = np.array([1.0, 0.20, 0.20, 1.0])
-
-                    g = scn.geoms[scn.ngeom]
-                    mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_ARROW, np.zeros(3), np.zeros(3), np.eye(3).flatten(), rgba)
-                    mujoco.mjv_connector(g, mujoco.mjtGeom.mjGEOM_ARROW, 0.018, pos, target)
-                    g.category = mujoco.mjtCatBit.mjCAT_DECOR
-                    scn.ngeom += 1
-
-        # 3. Đa giác thăng bằng Support Polygon & Điểm ZMP
-        if self.layer_zmp:
-            poly = telem['support_poly']
-            if len(poly) >= 2:
-                for i in range(len(poly)):
-                    p1 = np.array([poly[i][0], poly[i][1], 0.004])
-                    p2 = np.array([poly[(i + 1) % len(poly)][0], poly[(i + 1) % len(poly)][1], 0.004])
-                    if scn.ngeom < scn.maxgeom:
-                        g = scn.geoms[scn.ngeom]
-                        mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_CAPSULE, np.zeros(3), np.zeros(3), np.eye(3).flatten(), np.array([0.0, 1.0, 0.55, 0.85]))
-                        mujoco.mjv_connector(g, mujoco.mjtGeom.mjGEOM_CAPSULE, 0.008, p1, p2)
-                        g.category = mujoco.mjtCatBit.mjCAT_DECOR
-                        scn.ngeom += 1
-
-            # Điểm ZMP phát sáng
-            zmp = telem['zmp']
-            if scn.ngeom < scn.maxgeom:
-                g = scn.geoms[scn.ngeom]
-                mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_SPHERE, np.array([0.035, 0.035, 0.035]), np.array([zmp[0], zmp[1], 0.006]), np.eye(3).flatten(), np.array([1.0, 0.80, 0.0, 0.95]))
-                g.category = mujoco.mjtCatBit.mjCAT_DECOR
-                scn.ngeom += 1
-
-        # 4. Mũi tên hiển thị lực đẩy xô thử nghiệm
+        # Mũi tên đỏ chỉ báo lực đẩy khi thử nghiệm cân bằng
         if self.push_decay > 0.0 and scn.ngeom < scn.maxgeom:
             torso_pos = self.data.xpos[self.telemetry.torso_id]
             f_norm = np.linalg.norm(self.push_force[:2])
@@ -996,26 +894,6 @@ class BlenderMuJoCoViewer:
                 g.category = mujoco.mjtCatBit.mjCAT_DECOR
                 scn.ngeom += 1
 
-        # 5. Vệt dải quỹ đạo di chuyển
-        if self.layer_trajectory and len(self.trajectory_history) >= 2:
-            pts = list(self.trajectory_history)
-            for i in range(len(pts) - 1):
-                if scn.ngeom < scn.maxgeom:
-                    alpha = (i + 1) / float(len(pts)) * 0.70
-                    g = scn.geoms[scn.ngeom]
-                    mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_CAPSULE, np.zeros(3), np.zeros(3), np.eye(3).flatten(), np.array([0.0, 0.85, 1.0, alpha]))
-                    mujoco.mjv_connector(g, mujoco.mjtGeom.mjGEOM_CAPSULE, 0.006, pts[i], pts[i + 1])
-                    g.category = mujoco.mjtCatBit.mjCAT_DECOR
-                    scn.ngeom += 1
-
-        # 6. Vòng tròn đo khoảng cách mét trên sàn
-        if self.layer_metric_grid:
-            for radius in [0.5, 1.0, 1.5, 2.0]:
-                if scn.ngeom < scn.maxgeom:
-                    g = scn.geoms[scn.ngeom]
-                    mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_CYLINDER, np.array([radius, 0.001, 0.001]), np.array([0.0, 0.0, 0.0005]), np.eye(3).flatten(), np.array([0.25, 0.40, 0.60, 0.18]))
-                    g.category = mujoco.mjtCatBit.mjCAT_DECOR
-                    scn.ngeom += 1
 
     # ==========================================================================
     # 6. GIAO DIỆN HEADS-UP DISPLAY (HUD) 100% TIẾNG VIỆT
@@ -1203,11 +1081,11 @@ class BlenderMuJoCoViewer:
             ("1-4", f"Tốc độ:{self.sim_speed}x"),
             ("MŨI TÊN/F", "Thử Đẩy Xô"),
             ("TAB", "Ẩn/Hiện Bảng Số Liệu"),
-            ("F1-F6", "Lớp Phủ 3D"),
             ("F8", f"Giao diện:{'SÁNG' if self.theme_academic else 'TỐI'}"),
             ("P", "Chụp Ảnh"),
             ("R", "Đặt Lại Tư Thế")
         ]
+
 
         bx = dx + 12
         for key, desc in shortcuts:
