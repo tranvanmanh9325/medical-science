@@ -1,0 +1,8 @@
+Metadata-Version: 2.1
+Name: surrol
+Version: 0.2.0
+Summary: SurRoL: An Open-source Reinforcement Learning Centered and dVRK Compatible Platform for Surgical Robot Learning
+Author: Med-AIR@CUHK
+Keywords: simulation,medical robotics,dVRK,reinforcement learning
+Requires-Python: >=3.7
+Provides-Extra: all

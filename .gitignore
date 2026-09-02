@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.env
+
+# Jupyter & Logs
+.ipynb_checkpoints
+*.log
+MUJOCO_LOG.TXT
+
+# Kaggle large outputs & checkpoints
+kaggle_output/
+kaggle_output_*/
+checkpoints/
+
+# OS Specific
+.DS_Store
+Thumbs.db

@@ -1,0 +1,63 @@
+<mujoco model="psm">
+  <compiler angle="radian"/>
+
+  <asset>
+    <mesh name="tool_roll_link" content_type="model/stl" file="tool_roll_link.STL"/>
+    <mesh name="tool_pitch_link" content_type="model/stl" file="tool_pitch_link.STL"/>
+  </asset>
+
+  <worldbody>
+    <body name="psm_yaw_link" pos="0 0.4864 0" quat="0.5 0.5 -0.5 0.5">
+      <inertial pos="-0.038769 0 0.527996" mass="1.4705" diaginertia="0.001 0.001 0.001"/>
+      <joint name="psm_yaw_joint" range="-1.5883 1.5883" actuatorfrcrange="-100 100"/>
+      <body name="psm_pitch_end_link" quat="0.5 -0.5 -0.5 -0.5">
+        <inertial pos="0.0442293 0.27985 0" mass="2.091" diaginertia="0.001 0.001 0.001"/>
+        <joint name="psm_pitch_end_joint" range="-0.9251 0.9251" actuatorfrcrange="-100 100"/>
+        <body name="psm_main_insertion_link" pos="0 0.4318 0" quat="0.707107 0.707107 0 0">
+          <inertial pos="-0.00010934 -0.0040563 0.0098616" mass="0.22491" diaginertia="0.001 0.001 0.001"/>
+          <joint name="psm_main_insertion_joint" type="slide" range="0 0.24" actuatorfrcrange="-100 100"/>
+          <body name="psm_tool_roll_link" pos="0 0 0.4162">
+            <inertial pos="0 0 -0.0058234" mass="0.00033225" diaginertia="0.001 0.001 0.001"/>
+            <joint name="psm_tool_roll_joint" range="-4.5379 4.5379" actuatorfrcrange="-100 100"/>
+            <geom type="mesh" rgba="0.8941 0.8941 0.8863 1" mesh="tool_roll_link"/>
+            <body name="psm_tool_pitch_link" quat="0.5 -0.5 -0.5 -0.5">
+              <inertial pos="0.0035763 0 0" mass="0.00025784" diaginertia="0.001 0.001 0.001"/>
+              <joint name="psm_tool_pitch_joint" range="-1.3963 1.3963" actuatorfrcrange="-100 100"/>
+              <geom type="mesh" rgba="0.8941 0.8941 0.8863 1" mesh="tool_pitch_link"/>
+              <body name="psm_tool_yaw_link" pos="0.0091 0 0" quat="0.5 -0.5 -0.5 -0.5">
+                <inertial pos="0 0.0051 0" quat="0.707107 0.707107 0 0" mass="0.2" diaginertia="0.0020052 0.0020052 0.002"/>
+                <joint name="psm_tool_yaw_joint" range="-1.3963 1.3963" actuatorfrcrange="-100 100"/>
+                <body name="psm_tool_gripper1_link">
+                  <inertial pos="0.00019605 0.001435 -0.00088478" mass="0.02" diaginertia="0.001 0.001 0.001"/>
+                  <joint name="psm_tool_gripper1_joint" range="-1 1" actuatorfrcrange="-20 20"/>
+                  <geom size="0.0007 0.0051 0.0009" pos="0.0007 0.0051 0" type="box" rgba="0.8941 0.8941 0.8863 1"/>
+                </body>
+                <body name="psm_tool_gripper2_link">
+                  <inertial pos="-0.00019605 0.001435 0.00088478" mass="0.02" diaginertia="0.001 0.001 0.001"/>
+                  <joint name="psm_tool_gripper2_joint" range="-1 1" actuatorfrcrange="-20 20"/>
+                  <geom size="0.0007 0.0051 0.0009" pos="-0.0007 0.0051 0" type="box" rgba="0.8941 0.8941 0.8863 1"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="psm_pitch_back_link" pos="0 0 0.516" quat="0.699667 -0.699667 -0.102307 -0.102307">
+        <inertial pos="-0.011651 -0.036241 0" mass="0.98494" diaginertia="0.001 0.001 0.001"/>
+        <joint name="psm_pitch_back_joint" range="-0.93556 0.94249" actuatorfrcrange="-100 100"/>
+        <body name="psm_pitch_bottom_link" pos="0.15 0 0" quat="0.59736 0 0 0.801973">
+          <inertial pos="0.25683 -0.010348 0" mass="0.44569" diaginertia="0.001 0.001 0.001"/>
+          <joint name="psm_pitch_bottom_joint" range="-0.94249 0.93556" actuatorfrcrange="-100 100"/>
+        </body>
+        <body name="psm_pitch_top_link" pos="0.18366 0.014121 0" quat="0.59736 0 0 0.801973">
+          <inertial pos="0.31246 -0.00056566 0" mass="0.17841" diaginertia="0.001 0.001 0.001"/>
+          <joint name="psm_pitch_top_joint" range="-0.94249 0.93556" actuatorfrcrange="-100 100"/>
+        </body>
+      </body>
+      <body name="psm_pitch_front_link" pos="0 0 0.42" quat="0.699667 -0.699667 -0.102307 -0.102307">
+        <inertial pos="0.096269 0 0.047551" mass="0.074425" diaginertia="0.001 0.001 0.001"/>
+        <joint name="psm_pitch_front_joint" range="-0.93556 0.94249" actuatorfrcrange="-100 100"/>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

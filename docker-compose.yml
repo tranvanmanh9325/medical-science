@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  apollo-mjx-trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: apollo_mjx_training_container
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - JAX_PLATFORMS=cuda,cpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - .:/workspace/medical-science
+      - ./gpu/kaggle.json:/root/.kaggle/kaggle.json:ro
+    working_dir: /workspace/medical-science
+    command: ["python", "training/kaggle_train.py"]

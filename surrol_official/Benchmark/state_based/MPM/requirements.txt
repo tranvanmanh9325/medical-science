@@ -1,0 +1,4 @@
+taichi==1.6.0
+scikit-image
+pymeshlab
+plyfile

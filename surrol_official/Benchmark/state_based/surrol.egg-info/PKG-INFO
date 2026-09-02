@@ -1,0 +1,26 @@
+Metadata-Version: 2.1
+Name: surrol
+Version: 0.2.0
+Summary: SurRoL: An Open-source Reinforcement Learning Centered and dVRK Compatible Platform for Surgical Robot Learning
+Author: Med-AIR@CUHK
+Keywords: simulation,medical robotics,dVRK,reinforcement learning
+Requires-Python: >=3.7
+License-File: LICENSE
+Requires-Dist: gym>=0.15.6
+Requires-Dist: numpy>=1.21.1
+Requires-Dist: scipy
+Requires-Dist: pandas
+Requires-Dist: imageio
+Requires-Dist: imageio-ffmpeg
+Requires-Dist: opencv-python
+Requires-Dist: roboticstoolbox-python
+Requires-Dist: sympy
+Requires-Dist: panda3d==1.10.11
+Requires-Dist: trimesh
+Requires-Dist: kivymd
+Provides-Extra: all
+Requires-Dist: tensorflow-gpu==1.14; extra == "all"
+Requires-Dist: baselines; extra == "all"
+Requires-Dist: mpi4py; extra == "all"
+Requires-Dist: ipython; extra == "all"
+Requires-Dist: jupyter; extra == "all"

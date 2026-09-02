@@ -1,0 +1,139 @@
+<mujoco model="davinci_psm">
+  <compiler angle="radian" coordinate="local" meshdir="assets" autolimits="true"/>
+  
+  <default>
+    <joint damping="1.5" armature="0.05" frictionloss="0.05"/>
+    <geom friction="1.2 0.005 0.0001" solref="0.01 1" solimp="0.9 0.95 0.001"/>
+    <position kp="600" kv="60" forcerange="-100 100"/>
+  </default>
+
+  <asset>
+    <!-- Medical Grade High-Fidelity Materials -->
+    <material name="davinci_white" rgba="0.94 0.95 0.97 1.0" specular="0.7" shininess="0.85" reflectance="0.08"/>
+    <material name="davinci_metallic" rgba="0.82 0.85 0.88 1.0" specular="0.95" shininess="0.95" reflectance="0.22"/>
+    <material name="davinci_dark" rgba="0.18 0.20 0.23 1.0" specular="0.5" shininess="0.5"/>
+    <material name="davinci_gold" rgba="0.85 0.70 0.22 1.0" specular="0.85" shininess="0.85" reflectance="0.15"/>
+    <material name="surgical_needle" rgba="0.90 0.92 0.95 1.0" specular="0.98" shininess="0.95" reflectance="0.3"/>
+
+    <!-- da Vinci dVRK PSM CAD Meshes -->
+    <mesh name="psm_base_mesh" file="base_link.STL"/>
+    <mesh name="psm_yaw_mesh" file="yaw_link.STL"/>
+    <mesh name="pitch_end_mesh" file="pitch_end_link.STL"/>
+    <mesh name="pitch_front_mesh" file="pitch_front_link.STL"/>
+    <mesh name="pitch_bottom_mesh" file="pitch_bottom_link.STL"/>
+    <mesh name="pitch_top_mesh" file="pitch_top_link.STL"/>
+    <mesh name="pitch_back_mesh" file="pitch_back_link.STL"/>
+    <mesh name="main_insertion_mesh" file="main_insertion_link.STL"/>
+    
+    <!-- EndoWrist Surgical Instrument Meshes -->
+    <mesh name="tool_roll_mesh" file="tool_roll_link.STL"/>
+    <mesh name="tool_pitch_mesh" file="tool_pitch_link.STL"/>
+    <mesh name="tool_yaw_mesh" file="tool_yaw_link.STL"/>
+    <mesh name="gripper1_mesh" file="tool_gripper1_link.obj"/>
+    <mesh name="gripper2_mesh" file="tool_gripper2_link.obj"/>
+    
+    <!-- Curved Surgical Suture Needle -->
+    <mesh name="needle_mesh" file="needle_40mm.obj"/>
+  </asset>
+
+  <worldbody>
+    <!-- PSM Base Mounting Cart Column -->
+    <body name="psm_cart_column" pos="-0.08 -0.32 0">
+      <geom name="cart_base" type="cylinder" size="0.22 0.03" pos="0 0 0.03" material="davinci_dark"/>
+      <geom name="cart_post" type="cylinder" size="0.045 0.38" pos="0 0 0.40" material="davinci_white"/>
+      
+      <!-- Base Mounting Bracket (Euler: 0, 45, 0 -> Perfect natural surgical arm reach) -->
+      <body name="psm_base_link" pos="0 0.05 0.76" quat="0.92388 0 0.38268 0">
+        <geom name="base_geom" type="mesh" mesh="psm_base_mesh" material="davinci_white"/>
+        
+        <!-- Joint 1: PSM Outer Yaw -->
+        <body name="psm_yaw_link" pos="0 0.4864 0" quat="0.5 0.5 -0.5 0.5">
+          <joint name="psm_yaw_joint" type="hinge" axis="0 0 1" range="-1.588 1.588"/>
+          <geom name="yaw_geom" type="mesh" mesh="psm_yaw_mesh" pos="0 0 0.4864" material="davinci_white"/>
+
+          <!-- Main RCM Kinematic Chain -->
+          <body name="psm_pitch_end_link" quat="0.5 -0.5 -0.5 -0.5">
+            <joint name="psm_pitch_end_joint" type="hinge" axis="0 0 1" range="-0.925 0.925"/>
+            <geom name="pitch_end_geom" type="mesh" mesh="pitch_end_mesh" pos="0.0423 0.14372 0" quat="0 0 0 1" material="davinci_gold"/>
+
+            <!-- Joint 3: Prismatic Insertion Link -->
+            <body name="psm_main_insertion_link" pos="0 0.4318 0" quat="0.707107 0.707107 0 0">
+              <joint name="psm_main_insertion_joint" type="slide" axis="0 0 1" range="0.02 0.28"/>
+              <geom name="main_insertion_geom" type="mesh" mesh="main_insertion_mesh" material="davinci_white"/>
+
+              <!-- Joint 4: EndoWrist Tool Roll (Protruding past cannula into surgical field) -->
+              <body name="psm_tool_roll_link" pos="0 0 0.52">
+                <joint name="psm_tool_roll_joint" type="hinge" axis="0 0 1" range="-4.53 4.53"/>
+                <geom name="tool_roll_geom" type="mesh" mesh="tool_roll_mesh" material="davinci_metallic"/>
+
+                <!-- Joint 5: EndoWrist Pitch -->
+                <body name="psm_tool_pitch_link" quat="0.5 -0.5 -0.5 -0.5">
+                  <joint name="psm_tool_pitch_joint" type="hinge" axis="0 0 1" range="-1.396 1.396"/>
+                  <geom name="tool_pitch_geom" type="mesh" mesh="tool_pitch_mesh" material="davinci_metallic"/>
+
+                  <!-- Joint 6: EndoWrist Yaw -->
+                  <body name="psm_tool_yaw_link" pos="0.0091 0 0" quat="0.5 -0.5 -0.5 -0.5">
+                    <joint name="psm_tool_yaw_joint" type="hinge" axis="0 0 1" range="-1.396 1.396"/>
+                    <geom name="tool_yaw_geom" type="mesh" mesh="tool_yaw_mesh" material="davinci_dark"/>
+
+                    <!-- Joint 7 & 8: Large Needle Driver Jaws -->
+                    <body name="tool_gripper1_link">
+                      <joint name="psm_tool_gripper1_joint" type="hinge" axis="0 0 1" range="0 0.8"/>
+                      <geom name="gripper1_geom" type="mesh" mesh="gripper1_mesh" material="davinci_metallic"/>
+                    </body>
+                    
+                    <body name="tool_gripper2_link">
+                      <joint name="psm_tool_gripper2_joint" type="hinge" axis="0 0 -1" range="0 0.8"/>
+                      <geom name="gripper2_geom" type="mesh" mesh="gripper2_mesh" material="davinci_metallic"/>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+
+          <!-- Parallel RCM Linkage 1: Back Link & Bottom/Top Bars -->
+          <body name="psm_pitch_back_link" pos="0 0 0.516" quat="0.699667 -0.699667 -0.102307 -0.102307">
+            <joint name="psm_pitch_back_joint" type="hinge" axis="0 0 1" range="-0.935 0.942"/>
+            <geom name="pitch_back_geom" type="mesh" mesh="pitch_back_mesh" material="davinci_metallic"/>
+            
+            <body name="psm_pitch_bottom_link" pos="0.15 0 0" quat="0.59736 0 0 0.801973">
+              <joint name="psm_pitch_bottom_joint" type="hinge" axis="0 0 1" range="-0.942 0.935"/>
+              <geom name="pitch_bottom_geom" type="mesh" mesh="pitch_bottom_mesh" material="davinci_dark"/>
+            </body>
+
+            <body name="psm_pitch_top_link" pos="0.18366 0.014121 0" quat="0.59736 0 0 0.801973">
+              <joint name="psm_pitch_top_joint" type="hinge" axis="0 0 1" range="-0.942 0.935"/>
+              <geom name="pitch_top_geom" type="mesh" mesh="pitch_top_mesh" material="davinci_metallic"/>
+            </body>
+          </body>
+
+          <!-- Parallel RCM Linkage 2: Front Bar -->
+          <body name="psm_pitch_front_link" pos="0 0 0.42" quat="0.699667 -0.699667 -0.102307 -0.102307">
+            <joint name="psm_pitch_front_joint" type="hinge" axis="0 0 1" range="-0.935 0.942"/>
+            <geom name="pitch_front_geom" type="mesh" mesh="pitch_front_mesh" material="davinci_metallic"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <equality>
+    <!-- RCM Parallel 4-Bar Coupling Constraints -->
+    <joint joint1="psm_pitch_back_joint" joint2="psm_pitch_end_joint" polycoef="0 1 0 0 0"/>
+    <joint joint1="psm_pitch_front_joint" joint2="psm_pitch_end_joint" polycoef="0 1 0 0 0"/>
+    <joint joint1="psm_pitch_bottom_joint" joint2="psm_pitch_end_joint" polycoef="0 -1 0 0 0"/>
+    <joint joint1="psm_pitch_top_joint" joint2="psm_pitch_end_joint" polycoef="0 -1 0 0 0"/>
+    <joint joint1="psm_tool_gripper2_joint" joint2="psm_tool_gripper1_joint" polycoef="0 1 0 0 0"/>
+  </equality>
+
+  <actuator>
+    <position name="act_psm_yaw" joint="psm_yaw_joint" kp="800" kv="80" forcerange="-100 100"/>
+    <position name="act_psm_pitch" joint="psm_pitch_end_joint" kp="800" kv="80" forcerange="-100 100"/>
+    <position name="act_psm_insertion" joint="psm_main_insertion_joint" kp="1000" kv="100" forcerange="-150 150"/>
+    <position name="act_psm_roll" joint="psm_tool_roll_joint" kp="300" kv="30" forcerange="-30 30"/>
+    <position name="act_psm_wrist_pitch" joint="psm_tool_pitch_joint" kp="200" kv="20" forcerange="-20 20"/>
+    <position name="act_psm_wrist_yaw" joint="psm_tool_yaw_joint" kp="200" kv="20" forcerange="-20 20"/>
+    <position name="act_psm_gripper" joint="psm_tool_gripper1_joint" kp="150" kv="15" forcerange="-15 15"/>
+  </actuator>
+</mujoco>

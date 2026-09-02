@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<launch>
+
+  <arg name="arm"/>
+  <arg name="generation"/>
+  <arg name="urdf_file"
+       default="$(arg arm)"/>
+
+  <arg name="suj"
+       default="False"/>
+
+  <arg name="direct_control"
+       default="False"/>
+
+  <arg name="_urdf"
+       default="$(find dvrk_model)/urdf/$(arg generation)/$(arg urdf_file).urdf.xacro"/>
+
+  <group ns="$(arg arm)">
+    <arg name="rate"
+         default="20"/>
+    <group if="$(eval suj)">
+      <param name="robot_description"
+             command="rosrun xacro xacro $(arg _urdf) arm:=$(arg arm) parent_link_:=SUJ_$(arg arm)_RCM"/>
+    </group>
+    <group unless="$(eval suj)">
+      <param name="robot_description"
+             command="rosrun xacro xacro $(arg _urdf) arm:=$(arg arm)"/>
+    </group>
+    <param name="rate"
+           value="$(arg rate)"/>
+
+          <group unless="$(eval direct_control)">
+               <rosparam param="source_list" subst_value="True">
+                    [/$(arg arm)/measured_js,
+                    /$(arg arm)/jaw/measured_js,
+                    /$(arg arm)/gripper/measured_js]
+               </rosparam>
+
+               <node name="joint_state_publisher"
+                              pkg="joint_state_publisher"
+                              type="joint_state_publisher"/>
+          </group>
+
+          <group if="$(eval direct_control)">
+               <node name="joint_state_publisher"
+                              pkg="joint_state_publisher_gui"
+                              type="joint_state_publisher_gui"/>
+          </group>
+
+    <node name="robot_state_publisher"
+          pkg="robot_state_publisher"
+          type="robot_state_publisher"/>
+  </group>
+
+</launch>

@@ -1,0 +1,250 @@
+<mujoco model="davinci_dual_surgical_suite">
+  <compiler angle="radian" coordinate="local" meshdir="../davinci_dvrk/assets"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+
+  <visual>
+    <headlight ambient="0.40 0.42 0.48" diffuse="0.80 0.82 0.88" specular="0.35 0.35 0.35"/>
+    <quality shadowsize="4096" offsamples="8"/>
+    <global azimuth="140" elevation="-22" offwidth="1920" offheight="1080"/>
+    <rgba haze="0.08 0.12 0.18 1"/>
+  </visual>
+
+  <asset>
+    <!-- Operating Theater Skybox & Floor Texture -->
+    <texture type="skybox" builtin="gradient" rgb1="0.15 0.22 0.35" rgb2="0.02 0.03 0.06" width="512" height="3072"/>
+    <texture type="2d" name="ground_tex" builtin="checker" mark="edge" 
+             rgb1="0.10 0.14 0.20" rgb2="0.06 0.08 0.12" markrgb="0.25 0.38 0.52" width="600" height="600"/>
+    <material name="reflective_ground" texture="ground_tex" texuniform="true" texrepeat="8 8" reflectance="0.28" specular="0.6"/>
+
+    <!-- Medical Grade High-Fidelity Materials -->
+    <material name="davinci_white" rgba="0.95 0.96 0.98 1.0" specular="0.8" shininess="0.9" reflectance="0.12"/>
+    <material name="davinci_metallic" rgba="0.85 0.88 0.92 1.0" specular="0.98" shininess="0.95" reflectance="0.30"/>
+    <material name="davinci_dark" rgba="0.15 0.17 0.20 1.0" specular="0.5" shininess="0.6"/>
+    <material name="davinci_gold" rgba="0.88 0.72 0.22 1.0" specular="0.88" shininess="0.85" reflectance="0.18"/>
+    <material name="davinci_blue" rgba="0.18 0.45 0.85 1.0" specular="0.85" shininess="0.85" reflectance="0.18"/>
+    
+    <material name="tray_metal" rgba="0.80 0.82 0.86 1.0" specular="0.95" shininess="0.92" reflectance="0.25"/>
+    <material name="tissue_mat" rgba="0.85 0.36 0.36 1.0" specular="0.4" shininess="0.3"/>
+    <material name="peg_mat" rgba="0.85 0.85 0.90 1.0" specular="0.9" shininess="0.9"/>
+    <material name="ring_red" rgba="0.90 0.20 0.20 1.0" specular="0.6" shininess="0.7"/>
+    <material name="ring_blue" rgba="0.15 0.50 0.95 1.0" specular="0.6" shininess="0.7"/>
+    <material name="ring_green" rgba="0.15 0.80 0.35 1.0" specular="0.6" shininess="0.7"/>
+    <material name="needle_mat" rgba="0.92 0.94 0.98 1.0" specular="0.98" shininess="0.95" reflectance="0.35"/>
+
+    <!-- Official Meshes from Johns Hopkins dVRK & da Vinci CAD Package -->
+    <mesh name="USM_base" file="../../dvrk_model_official/meshes/arms/Si/USM/USM_base.stl"/>
+    <mesh name="USM_yaw" file="../../dvrk_model_official/meshes/arms/Si/USM/USM_yaw.stl"/>
+    <mesh name="USM_pitch" file="../../dvrk_model_official/meshes/arms/Si/USM/USM_pitch.stl"/>
+    <mesh name="USM_pitch_3" file="../../dvrk_model_official/meshes/arms/Si/USM/USM_pitch_3.stl"/>
+    <mesh name="USM_pitch_4" file="../../dvrk_model_official/meshes/arms/Si/USM/USM_pitch_4.stl"/>
+    <mesh name="housing_Si" file="../../dvrk_model_official/meshes/instruments/housing/Si/housing_Si.obj"/>
+
+    <!-- Continuous 1:1 Solid EndoWrist CAD Meshes -->
+    <mesh name="tool_roll_mesh" file="tool_roll_link.STL"/>
+    <mesh name="tool_pitch_mesh" file="tool_pitch_link.STL"/>
+    <mesh name="tool_yaw_mesh" file="tool_yaw_link.STL"/>
+    <mesh name="tool_gripper1_mesh" file="tool_gripper1_link.obj"/>
+    <mesh name="tool_gripper2_mesh" file="tool_gripper2_link.obj"/>
+    <mesh name="needle_mesh" file="needle_40mm.obj"/>
+  </asset>
+
+  <worldbody>
+    <!-- Surgical Overhead Spotlights -->
+    <light pos="0 0 3.2" dir="0 0 -1" directional="true" castshadow="true" diffuse="0.95 0.95 1.0"/>
+    <light pos="1.5 1.5 2.5" dir="-1 -1 -1" directional="false" diffuse="0.45 0.45 0.50"/>
+    <light pos="-1.5 1.5 2.5" dir="1 -1 -1" directional="false" diffuse="0.45 0.45 0.50"/>
+
+    <geom name="floor" type="plane" size="5 5 0.05" material="reflective_ground"/>
+
+    <!-- ==================== DUAL-ARM SURGICAL PATIENT CART ==================== -->
+    <body name="patient_side_cart" pos="0 -0.82 0">
+      <!-- Main Cart Column & Dual-Arm Boom -->
+      <geom name="cart_pedestal" type="cylinder" size="0.35 0.04" pos="0 0 0.04" material="davinci_dark"/>
+      <geom name="cart_tower" type="cylinder" size="0.07 0.45" pos="0 0 0.49" material="davinci_white"/>
+      <geom name="cart_boom_crossbar" type="box" size="0.28 0.06 0.04" pos="0 0 0.94" material="davinci_dark"/>
+
+      <!-- ==================== LEFT ARM: PSM1 (Large Needle Driver) ==================== -->
+      <body name="psm1_setup_mount" pos="-0.22 0.0 0.94" quat="0.9848 0 0 0.1736">
+        <geom pos="0 0 0" quat="0.707107 0 0 0.707107" type="mesh" material="davinci_white" mesh="USM_base"/>
+        
+        <body name="psm1_yaw_link" pos="0 0.158 0" quat="0.707107 0 0 0.707107">
+          <inertial pos="0.146 0.090 -0.025" mass="1.75" diaginertia="0.022 0.020 0.003"/>
+          <joint name="psm1_yaw" range="-1.57 1.57" axis="-1 0 0" damping="2.0"/>
+          <geom type="mesh" material="davinci_white" mesh="USM_yaw"/>
+
+          <body name="psm1_pitch_link" pos="0.2987 0 -0.071222" quat="-3.09791e-06 -0.537315 1.97367e-06 -0.843382">
+            <inertial pos="0.084 -0.001 -0.029" mass="4.0" diaginertia="0.026 0.025 0.012"/>
+            <joint name="psm1_pitch" range="-0.92 0.92" axis="0 -1 0" damping="2.0"/>
+            <geom type="mesh" material="davinci_gold" mesh="USM_pitch"/>
+
+            <body name="psm1_pitch_2_link" pos="0.2032 0 0" quat="-3.30142e-06 -0.438389 1.61029e-06 -0.898786">
+              <geom type="mesh" material="davinci_white" mesh="USM_pitch_3"/>
+
+              <body name="psm1_pitch_3_link" pos="0.35966 0 0.16013" quat="0.999489 0 -0.031976 0">
+                <geom type="mesh" material="davinci_white" mesh="USM_pitch_4"/>
+
+                <!-- PSM1 Trocar Insertion -->
+                <body name="psm1_adaptor_link" pos="0.115238 0 0.310955" quat="0 0 -1 0">
+                  <inertial pos="0 0 0" mass="0.5" diaginertia="0.01 0.01 0.01"/>
+                  <joint name="psm1_insertion" type="slide" range="0 0.28" axis="0 0 1" damping="3.0"/>
+                  <geom quat="0.5 0.5 -0.5 0.5" type="mesh" material="davinci_white" mesh="housing_Si"/>
+
+                  <!-- PSM1 EndoWrist Continuous Shaft -->
+                  <body name="psm1_tool_roll_link" pos="0 0 0.4162">
+                    <inertial pos="0 0 0" mass="0.08" diaginertia="0.002 0.002 0.002"/>
+                    <joint name="psm1_roll" range="-4.53 4.53" axis="0 0 1" damping="0.8"/>
+                    <geom type="mesh" material="davinci_metallic" mesh="tool_roll_mesh"/>
+
+                    <!-- PSM1 EndoWrist Articulated Pitch Link -->
+                    <body name="psm1_tool_pitch_link" quat="0.5 -0.5 -0.5 -0.5">
+                      <inertial pos="0 0 0" mass="0.03" diaginertia="0.0008 0.0008 0.0008"/>
+                      <joint name="psm1_wrist_pitch" range="-1.39 1.39" axis="0 0 1" damping="0.4"/>
+                      <geom type="mesh" material="davinci_metallic" mesh="tool_pitch_mesh"/>
+
+                      <!-- PSM1 EndoWrist Articulated Yaw Link -->
+                      <body name="psm1_tool_yaw_link" pos="0.0091 0 0" quat="0.5 -0.5 -0.5 -0.5">
+                        <inertial pos="0 0 0" mass="0.03" diaginertia="0.0008 0.0008 0.0008"/>
+                        <joint name="psm1_wrist_yaw" range="-1.39 1.39" axis="0 0 1" damping="0.4"/>
+                        <geom type="mesh" material="davinci_dark" mesh="tool_yaw_mesh"/>
+
+                        <!-- PSM1 Large Needle Driver Gripper Jaws -->
+                        <body name="psm1_tool_gripper1_link">
+                          <inertial pos="0 0 0" mass="0.015" diaginertia="0.0002 0.0002 0.0002"/>
+                          <joint name="psm1_jaw_1" range="0 0.8" axis="0 0 1" damping="0.2"/>
+                          <geom type="mesh" material="davinci_metallic" mesh="tool_gripper1_mesh"/>
+                        </body>
+                        <body name="psm1_tool_gripper2_link">
+                          <inertial pos="0 0 0" mass="0.015" diaginertia="0.0002 0.0002 0.0002"/>
+                          <joint name="psm1_jaw_2" range="0 0.8" axis="0 0 -1" damping="0.2"/>
+                          <geom type="mesh" material="davinci_metallic" mesh="tool_gripper2_mesh"/>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+
+      <!-- ==================== RIGHT ARM: PSM2 (ProGrasp Forceps) ==================== -->
+      <body name="psm2_setup_mount" pos="0.22 0.0 0.94" quat="0.9848 0 0 -0.1736">
+        <geom pos="0 0 0" quat="0.707107 0 0 0.707107" type="mesh" material="davinci_white" mesh="USM_base"/>
+        
+        <body name="psm2_yaw_link" pos="0 0.158 0" quat="0.707107 0 0 0.707107">
+          <inertial pos="0.146 0.090 -0.025" mass="1.75" diaginertia="0.022 0.020 0.003"/>
+          <joint name="psm2_yaw" range="-1.57 1.57" axis="-1 0 0" damping="2.0"/>
+          <geom type="mesh" material="davinci_white" mesh="USM_yaw"/>
+
+          <body name="psm2_pitch_link" pos="0.2987 0 -0.071222" quat="-3.09791e-06 -0.537315 1.97367e-06 -0.843382">
+            <inertial pos="0.084 -0.001 -0.029" mass="4.0" diaginertia="0.026 0.025 0.012"/>
+            <joint name="psm2_pitch" range="-0.92 0.92" axis="0 -1 0" damping="2.0"/>
+            <geom type="mesh" material="davinci_blue" mesh="USM_pitch"/>
+
+            <body name="psm2_pitch_2_link" pos="0.2032 0 0" quat="-3.30142e-06 -0.438389 1.61029e-06 -0.898786">
+              <geom type="mesh" material="davinci_white" mesh="USM_pitch_3"/>
+
+              <body name="psm2_pitch_3_link" pos="0.35966 0 0.16013" quat="0.999489 0 -0.031976 0">
+                <geom type="mesh" material="davinci_white" mesh="USM_pitch_4"/>
+
+                <!-- PSM2 Trocar Insertion -->
+                <body name="psm2_adaptor_link" pos="0.115238 0 0.310955" quat="0 0 -1 0">
+                  <inertial pos="0 0 0" mass="0.5" diaginertia="0.01 0.01 0.01"/>
+                  <joint name="psm2_insertion" type="slide" range="0 0.28" axis="0 0 1" damping="3.0"/>
+                  <geom quat="0.5 0.5 -0.5 0.5" type="mesh" material="davinci_white" mesh="housing_Si"/>
+
+                  <!-- PSM2 EndoWrist Continuous Shaft -->
+                  <body name="psm2_tool_roll_link" pos="0 0 0.4162">
+                    <inertial pos="0 0 0" mass="0.08" diaginertia="0.002 0.002 0.002"/>
+                    <joint name="psm2_roll" range="-4.53 4.53" axis="0 0 1" damping="0.8"/>
+                    <geom type="mesh" material="davinci_metallic" mesh="tool_roll_mesh"/>
+
+                    <!-- PSM2 EndoWrist Articulated Pitch Link -->
+                    <body name="psm2_tool_pitch_link" quat="0.5 -0.5 -0.5 -0.5">
+                      <inertial pos="0 0 0" mass="0.03" diaginertia="0.0008 0.0008 0.0008"/>
+                      <joint name="psm2_wrist_pitch" range="-1.39 1.39" axis="0 0 1" damping="0.4"/>
+                      <geom type="mesh" material="davinci_metallic" mesh="tool_pitch_mesh"/>
+
+                      <!-- PSM2 EndoWrist Articulated Yaw Link -->
+                      <body name="psm2_tool_yaw_link" pos="0.0091 0 0" quat="0.5 -0.5 -0.5 -0.5">
+                        <inertial pos="0 0 0" mass="0.03" diaginertia="0.0008 0.0008 0.0008"/>
+                        <joint name="psm2_wrist_yaw" range="-1.39 1.39" axis="0 0 1" damping="0.4"/>
+                        <geom type="mesh" material="davinci_dark" mesh="tool_yaw_mesh"/>
+
+                        <!-- PSM2 Forceps Gripper Jaws -->
+                        <body name="psm2_tool_gripper1_link">
+                          <inertial pos="0 0 0" mass="0.015" diaginertia="0.0002 0.0002 0.0002"/>
+                          <joint name="psm2_jaw_1" range="0 0.8" axis="0 0 1" damping="0.2"/>
+                          <geom type="mesh" material="davinci_metallic" mesh="tool_gripper1_mesh"/>
+                        </body>
+                        <body name="psm2_tool_gripper2_link">
+                          <inertial pos="0 0 0" mass="0.015" diaginertia="0.0002 0.0002 0.0002"/>
+                          <joint name="psm2_jaw_2" range="0 0.8" axis="0 0 -1" damping="0.2"/>
+                          <geom type="mesh" material="davinci_metallic" mesh="tool_gripper2_mesh"/>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+
+    <!-- ==================== SURGICAL OPERATING SUITE ==================== -->
+    <body name="surgical_operating_table" pos="0 0.0 0.0">
+      <!-- Chrome Mayo Stand Base & Tray -->
+      <geom type="cylinder" size="0.32 0.02" pos="0 0 0.02" material="tray_metal"/>
+      <geom type="cylinder" size="0.035 0.18" pos="0 0 0.20" material="tray_metal"/>
+      <geom type="box" size="0.38 0.25 0.012" pos="0 0 0.38" material="tray_metal"/>
+
+      <!-- FLS Laparoscopic Peg Transfer Training Board -->
+      <geom name="pegboard_base" type="box" size="0.16 0.10 0.01" pos="0 0.08 0.395" material="davinci_dark"/>
+      <!-- Pegs (Left Side & Right Side) -->
+      <geom name="peg1" type="cylinder" size="0.004 0.018" pos="-0.08 0.05 0.415" material="peg_mat"/>
+      <geom name="peg2" type="cylinder" size="0.004 0.018" pos="-0.08 0.11 0.415" material="peg_mat"/>
+      <geom name="peg3" type="cylinder" size="0.004 0.018" pos="0.08 0.05 0.415" material="peg_mat"/>
+      <geom name="peg4" type="cylinder" size="0.004 0.018" pos="0.08 0.11 0.415" material="peg_mat"/>
+
+      <!-- FLS Transfer Rings on Pegs -->
+      <geom name="ring1" type="cylinder" size="0.012 0.005" pos="-0.08 0.05 0.415" material="ring_red"/>
+      <geom name="ring2" type="cylinder" size="0.012 0.005" pos="-0.08 0.11 0.415" material="ring_blue"/>
+      <geom name="ring3" type="cylinder" size="0.012 0.005" pos="0.08 0.05 0.415" material="ring_green"/>
+
+      <!-- Silicone Suture Phantom Tissue Block -->
+      <geom name="suture_pad" type="box" size="0.10 0.05 0.015" pos="0 -0.10 0.40" material="tissue_mat"/>
+      <geom name="suture_incision" type="box" size="0.002 0.035 0.016" pos="0 -0.10 0.401" rgba="0.30 0.05 0.05 1"/>
+    </body>
+
+    <!-- Curved Surgical Suture Needle -->
+    <body name="suture_needle" pos="0.03 -0.10 0.415">
+      <freejoint name="needle_joint"/>
+      <geom type="mesh" mesh="needle_mesh" material="needle_mat" mass="0.005"/>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <!-- Left Arm PSM1 (Gold) Actuators -->
+    <position name="act_psm1_yaw" joint="psm1_yaw" kp="800" kv="80"/>
+    <position name="act_psm1_pitch" joint="psm1_pitch" kp="800" kv="80"/>
+    <position name="act_psm1_insertion" joint="psm1_insertion" kp="1000" kv="100"/>
+    <position name="act_psm1_roll" joint="psm1_roll" kp="300" kv="30"/>
+    <position name="act_psm1_wrist_pitch" joint="psm1_wrist_pitch" kp="200" kv="20"/>
+    <position name="act_psm1_wrist_yaw" joint="psm1_wrist_yaw" kp="200" kv="20"/>
+    <position name="act_psm1_jaw1" joint="psm1_jaw_1" kp="150" kv="15"/>
+    <position name="act_psm1_jaw2" joint="psm1_jaw_2" kp="150" kv="15"/>
+
+    <!-- Right Arm PSM2 (Blue) Actuators -->
+    <position name="act_psm2_yaw" joint="psm2_yaw" kp="800" kv="80"/>
+    <position name="act_psm2_pitch" joint="psm2_pitch" kp="800" kv="80"/>
+    <position name="act_psm2_insertion" joint="psm2_insertion" kp="1000" kv="100"/>
+    <position name="act_psm2_roll" joint="psm2_roll" kp="300" kv="30"/>
+    <position name="act_psm2_wrist_pitch" joint="psm2_wrist_pitch" kp="200" kv="20"/>
+    <position name="act_psm2_wrist_yaw" joint="psm2_wrist_yaw" kp="200" kv="20"/>
+    <position name="act_psm2_jaw1" joint="psm2_jaw_1" kp="150" kv="15"/>
+    <position name="act_psm2_jaw2" joint="psm2_jaw_2" kp="150" kv="15"/>
+  </actuator>
+</mujoco>

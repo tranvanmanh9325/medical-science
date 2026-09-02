@@ -1,0 +1,125 @@
+<mujoco model="official_dvrk_si_scene">
+  <compiler angle="radian" meshdir="D:\GitHub\medical-science\dvrk_model_official"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="Euler"/>
+
+  <visual>
+    <headlight ambient="0.45 0.45 0.50" diffuse="0.85 0.85 0.90" specular="0.3 0.3 0.3"/>
+    <quality shadowsize="4096" offsamples="8"/>
+    <global azimuth="135" elevation="-25" offwidth="1920" offheight="1080"/>
+    <rgba haze="0.1 0.15 0.22 1"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.18 0.28 0.42" rgb2="0.02 0.04 0.08" width="512" height="3072"/>
+    <texture type="2d" name="ground_tex" builtin="checker" mark="edge" 
+             rgb1="0.12 0.18 0.26" rgb2="0.07 0.11 0.16" markrgb="0.3 0.45 0.6" width="600" height="600"/>
+    <material name="reflective_ground" texture="ground_tex" texuniform="true" texrepeat="6 6" reflectance="0.25" specular="0.6"/>
+    <material name="davinci_white" rgba="0.94 0.95 0.97 1.0" specular="0.75" shininess="0.85" reflectance="0.1"/>
+    <material name="davinci_metallic" rgba="0.82 0.85 0.88 1.0" specular="0.95" shininess="0.95" reflectance="0.25"/>
+    <material name="davinci_dark" rgba="0.18 0.20 0.23 1.0" specular="0.5" shininess="0.5"/>
+    <material name="davinci_gold" rgba="0.85 0.70 0.22 1.0" specular="0.85" shininess="0.85" reflectance="0.15"/>
+    <material name="tray_metal" rgba="0.75 0.78 0.82 1.0" specular="0.9" shininess="0.9" reflectance="0.2"/>
+    <material name="tissue_mat" rgba="0.85 0.38 0.38 1.0" specular="0.4" shininess="0.3"/>
+
+    <!-- Official Meshes from Johns Hopkins dVRK -->
+    <mesh name="USM_base" file="meshes/arms/Si/USM/USM_base.stl"/>
+    <mesh name="USM_yaw" file="meshes/arms/Si/USM/USM_yaw.stl"/>
+    <mesh name="USM_pitch" file="meshes/arms/Si/USM/USM_pitch.stl"/>
+    <mesh name="USM_pitch_3" file="meshes/arms/Si/USM/USM_pitch_3.stl"/>
+    <mesh name="USM_pitch_4" file="meshes/arms/Si/USM/USM_pitch_4.stl"/>
+    <mesh name="housing_Si" file="meshes/instruments/housing/Si/housing_Si.obj"/>
+    <mesh name="roll_4670" file="meshes/instruments/roll/4670/roll_4670.obj" scale="0.1 0.1 0.1"/>
+    <mesh name="wrist_pitch_0091" file="meshes/instruments/wrist_pitch/0091/wrist_pitch_0091.obj" scale="0.1 0.1 0.1"/>
+    <mesh name="wrist_yaw_0091" file="meshes/instruments/wrist_yaw/0091/wrist_yaw_0091.obj"/>
+    <mesh name="tip_006_1" file="meshes/instruments/tip/006/tip_006_1.obj"/>
+    <mesh name="tip_006_2" file="meshes/instruments/tip/006/tip_006_2.obj"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 3.0" dir="0 0 -1" directional="true" castshadow="true" diffuse="0.95 0.95 1.0"/>
+    <light pos="1.2 1.2 2.2" dir="-1 -1 -1" directional="false" diffuse="0.5 0.5 0.55"/>
+
+    <geom name="floor" type="plane" size="4 4 0.05" material="reflective_ground"/>
+
+    <!-- Patient Side Cart Mount Column -->
+    <body name="cart_column" pos="0 -0.843163 0">
+      <geom type="cylinder" size="0.22 0.03" pos="0 0 0.03" material="davinci_dark"/>
+      <geom type="cylinder" size="0.045 0.40" pos="0 0 0.43" material="davinci_white"/>
+      <geom pos="0 0 0.85" quat="0.707107 0 0 0.707107" type="mesh" material="davinci_white" mesh="USM_base"/>
+      
+      <!-- Joint 1: Yaw -->
+      <body name="PSM1_yaw_link" pos="0 0.158 0.85" quat="0.707107 0 0 0.707107">
+        <joint name="yaw" range="-1.57 1.57" axis="-1 0 0" damping="1.5"/>
+        <geom type="mesh" material="davinci_white" mesh="USM_yaw"/>
+
+        <!-- Joint 2: Pitch Parallelogram Linkage -->
+        <body name="PSM1_pitch_link" pos="0.2987 0 -0.071222" quat="-3.09791e-06 -0.537315 1.97367e-06 -0.843382">
+          <joint name="pitch" range="-0.92 0.92" axis="0 -1 0" damping="1.5"/>
+          <geom type="mesh" material="davinci_gold" mesh="USM_pitch"/>
+
+          <body name="PSM1_pitch_2_link" pos="0.2032 0 0" quat="-3.30142e-06 -0.438389 1.61029e-06 -0.898786">
+            <geom type="mesh" material="davinci_metallic" mesh="USM_pitch_3"/>
+
+            <body name="PSM1_pitch_3_link" pos="0.35966 0 0.16013" quat="0.999489 0 -0.031976 0">
+              <geom type="mesh" material="davinci_metallic" mesh="USM_pitch_4"/>
+
+              <!-- Joint 3: Prismatic Insertion through Trocar -->
+              <body name="PSM1_adaptor_link" pos="0.115238 0 0.310955" quat="0 0 -1 0">
+                <joint name="insertion" type="slide" range="0 0.28" axis="0 0 1" damping="2.0"/>
+                <geom quat="0.5 0.5 -0.5 0.5" type="mesh" material="davinci_white" mesh="housing_Si"/>
+
+                <!-- Joint 4: EndoWrist Tool Roll -->
+                <body name="PSM1_roll_link" pos="0 0 0.467">
+                  <joint name="roll" range="-4.53 4.53" axis="0 0 1" damping="0.5"/>
+                  <geom pos="0 0 0.02975" quat="0.707107 -0.707107 0 0" type="mesh" material="davinci_metallic" mesh="roll_4670"/>
+
+                  <!-- Joint 5: Wrist Pitch -->
+                  <body name="PSM1_wrist_pitch_link" quat="0.5 -0.5 -0.5 -0.5">
+                    <joint name="wrist_pitch" range="-1.39 1.39" axis="0 0 1" damping="0.2"/>
+                    <geom pos="0.0295 0 0" quat="0.5 0.5 0.5 0.5" type="mesh" material="davinci_metallic" mesh="wrist_pitch_0091"/>
+
+                    <!-- Joint 6: Wrist Yaw -->
+                    <body name="PSM1_wrist_yaw_link" pos="0.0091 0 0" quat="0.5 -0.5 -0.5 -0.5">
+                      <joint name="wrist_yaw" range="-1.39 1.39" axis="0 0 1" damping="0.2"/>
+                      <geom pos="0 0 -0.000236" type="mesh" material="davinci_dark" mesh="wrist_yaw_0091"/>
+
+                      <!-- Joint 7 & 8: Large Needle Driver Jaws -->
+                      <body name="PSM1_jaw_1_link">
+                        <joint name="jaw_1" range="0 0.8" axis="0 0 1" damping="0.1"/>
+                        <geom type="mesh" material="davinci_metallic" mesh="tip_006_1"/>
+                      </body>
+                      <body name="PSM1_jaw_2_link">
+                        <joint name="jaw_2" range="0 0.8" axis="0 0 -1" damping="0.1"/>
+                        <geom type="mesh" material="davinci_metallic" mesh="tip_006_2"/>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+
+    <!-- Surgical Operating Field -->
+    <body name="surgical_stand" pos="0 0.0 0.0">
+      <geom type="cylinder" size="0.25 0.02" pos="0 0 0.02" material="tray_metal"/>
+      <geom type="cylinder" size="0.025 0.18" pos="0 0 0.20" material="tray_metal"/>
+      <geom type="box" size="0.25 0.18 0.01" pos="0 0 0.38" material="tray_metal"/>
+      <geom type="box" size="0.08 0.06 0.015" pos="0 0 0.405" material="tissue_mat"/>
+      <geom type="box" size="0.002 0.04 0.016" pos="0 0 0.406" rgba="0.3 0.05 0.05 1"/>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="act_yaw" joint="yaw" kp="800" kv="80"/>
+    <position name="act_pitch" joint="pitch" kp="800" kv="80"/>
+    <position name="act_insertion" joint="insertion" kp="1000" kv="100"/>
+    <position name="act_roll" joint="roll" kp="300" kv="30"/>
+    <position name="act_wrist_pitch" joint="wrist_pitch" kp="200" kv="20"/>
+    <position name="act_wrist_yaw" joint="wrist_yaw" kp="200" kv="20"/>
+    <position name="act_jaw1" joint="jaw_1" kp="150" kv="15"/>
+    <position name="act_jaw2" joint="jaw_2" kp="150" kv="15"/>
+  </actuator>
+</mujoco>

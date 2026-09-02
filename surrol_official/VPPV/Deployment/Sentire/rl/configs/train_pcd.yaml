@@ -1,0 +1,80 @@
+defaults:
+  - agent: ddpgbc
+  - _self_
+
+# File path
+cwd: ${hydra:runtime.output_dir}
+
+# Training params
+n_train_steps: 100_001
+n_eval: 10
+n_save: 5
+n_log: 100
+num_demo: 100
+n_seed_steps: ${agent.n_seed_steps}
+
+replay_buffer_capacity: 100_000
+batch_size: 128
+device: cuda:0
+seed: 1
+task: NeedlePick-v0
+postfix: null
+dont_save: False
+n_eval_episodes: 20
+demo_path: ./surrol/data/demo/data_NeedleReach-v0_random_100.npz
+
+use_wb: True
+project_name: dex
+entity_name: thuang22
+
+use_visual: True
+use_pc: True
+
+# PointNext config
+model:
+  NAME: BaseCls
+  pretrained_path: "models/scanobjectnn-pointnext-s_best.pth"
+  encoder_args:
+    NAME: PointNextEncoder
+    blocks: [1, 1, 1, 1, 1, 1]
+    strides: [1, 2, 2, 2, 2, 1]
+    width: 32
+    in_channels: 4
+    sa_layers: 2
+    sa_use_res: True
+    radius: 0.15
+    radius_scaling: 1.5
+    nsample: 32
+    expansion: 4
+    aggr_args:
+      feature_type: 'dp_fj'
+      reduction: 'max'
+    group_args:
+      NAME: 'ballquery'
+      normalize_dp: True
+    conv_args:
+      order: conv-norm-act
+    act_args:
+      act: 'relu'
+    norm_args:
+      norm: 'bn'
+  cls_args: 
+    NAME: ClsHead
+    num_classes: 15
+    mlps: [512, 256]
+    norm_args: 
+      norm: 'bn1d'
+
+# MPI
+mpi: {rank: null, is_chef: null, num_workers: null}
+
+# Working space
+hydra:
+  run:
+    dir: ./exp_local/${task}/${agent.name}/d${num_demo}/s${seed}
+  sweep:
+    dir: ./exp_local/${task}/${agent.name}/d${num_demo}
+    subdir: ${seed}
+  sweeper:
+    params:
+      seed: 1,2,3,4,5

@@ -1,0 +1,66 @@
+<mujoco model="PSM1">
+  <compiler angle="radian"/>
+
+  <asset>
+    <mesh name="USM_base" content_type="model/stl" file="meshes/arms/Si/USM/USM_base.stl"/>
+    <mesh name="USM_yaw" content_type="model/stl" file="meshes/arms/Si/USM/USM_yaw.stl"/>
+    <mesh name="USM_pitch" content_type="model/stl" file="meshes/arms/Si/USM/USM_pitch.stl"/>
+    <mesh name="USM_pitch_3" content_type="model/stl" file="meshes/arms/Si/USM/USM_pitch_3.stl"/>
+    <mesh name="USM_pitch_4" content_type="model/stl" file="meshes/arms/Si/USM/USM_pitch_4.stl"/>
+    <mesh name="housing_Si" content_type="model/obj" file="meshes/instruments/housing/Si/housing_Si.obj"/>
+    <mesh name="roll_4670" content_type="model/obj" file="meshes/instruments/roll/4670/roll_4670.obj" scale="0.1 0.1 0.1"/>
+  </asset>
+
+  <worldbody>
+    <geom pos="0 -0.843163 0" quat="0.707107 0 0 0.707107" type="mesh" rgba="0.8 0.8 0.8 1" mesh="USM_base"/>
+    <body name="PSM1_yaw_link" pos="0 -0.685163 0" quat="0.707107 0 0 0.707107">
+      <inertial pos="0.1461 0.090363 -0.024957" quat="-0.126565 0.790962 0.00777622 0.598581" mass="1.7571" diaginertia="0.0220634 0.0204218 0.00293623"/>
+      <joint name="yaw" range="-3.14 3.14" axis="-1 0 0"/>
+      <geom type="mesh" rgba="0.8 0.8 0.8 1" mesh="USM_yaw"/>
+      <body name="PSM1_pitch_link" pos="0.2987 0 -0.071222" quat="-3.09791e-06 -0.537315 1.97367e-06 -0.843382">
+        <inertial pos="0.083895 -0.00073113 -0.028998" quat="0.447214 0.543415 0.497791 0.506856" mass="4.017" diaginertia="0.0263184 0.0257058 0.0126958"/>
+        <joint name="pitch" range="-3.14 3.14" axis="0 -1 0"/>
+        <geom type="mesh" rgba="0.8 0.8 0.8 1" mesh="USM_pitch"/>
+        <body name="PSM1_pitch_2_link" pos="0.2032 0 0" quat="-3.30142e-06 -0.438389 1.61029e-06 -0.898786">
+          <inertial pos="0.11824 0 0.12932" quat="0.576241 0.409812 0.409812 0.576241" mass="2.1982" diaginertia="0.032839 0.029186 0.00504185"/>
+          <joint name="pitch_2" range="-3.14 3.14" axis="0 1 0"/>
+          <geom type="mesh" rgba="0.8 0.8 0.8 1" mesh="USM_pitch_3"/>
+          <body name="PSM1_pitch_3_link" pos="0.35966 0 0.16013" quat="0.999489 0 -0.031976 0">
+            <inertial pos="0.041219 0 0.13651" quat="0.707044 -0.00945741 -0.00945741 0.707044" mass="0.75206" diaginertia="0.018573 0.018559 0.000379764"/>
+            <joint name="pitch_3" range="-3.14 3.14" axis="0 1 0"/>
+            <geom type="mesh" rgba="0.8 0.8 0.8 1" mesh="USM_pitch_4"/>
+            <body name="PSM1_adaptor_link" pos="0.115238 0 0.310955" quat="0 0 -1 0">
+              <joint name="insertion" type="slide" range="0 0.299" actuatorfrcrange="-1000 1000"/>
+              <geom quat="0.5 0.5 -0.5 0.5" type="mesh" mesh="housing_Si"/>
+              <body name="PSM1_roll_link" pos="0 0 0.467">
+                <inertial pos="0 0 0" mass="0.01" diaginertia="0.0001 0.0001 0.0001"/>
+                <joint name="roll" range="-4.53786 4.53786" actuatorfrcrange="-1000 1000"/>
+                <geom pos="0 0 0.02975" quat="0.707107 -0.707107 0 0" type="mesh" rgba="0.55 0.55 0.55 1" mesh="roll_4670"/>
+                <body name="PSM1_wrist_pitch_link" quat="0.5 -0.5 -0.5 -0.5">
+                  <inertial pos="0 0 0" mass="0.01" diaginertia="0.0001 0.0001 0.0001"/>
+                  <joint name="wrist_pitch" range="-1.39626 1.39626" actuatorfrcrange="-1000 1000"/>
+                  <body name="PSM1_wrist_yaw_link" pos="0.0091 0 0" quat="0.5 -0.5 -0.5 -0.5">
+                    <inertial pos="0 0 0" mass="0.01" diaginertia="0.0001 0.0001 0.0001"/>
+                    <joint name="wrist_yaw" range="-1.39626 1.39626" actuatorfrcrange="-1000 1000"/>
+                    <body name="PSM1_jaw_link">
+                      <inertial pos="0 0 0" mass="0.01" diaginertia="0.0001 0.0001 0.0001"/>
+                      <joint name="jaw" range="-0.349066 1.39626" actuatorfrcrange="-1000 1000"/>
+                    </body>
+                    <body name="PSM1_jaw_1_link">
+                      <inertial pos="0 0 0" mass="0.01" diaginertia="0.0001 0.0001 0.0001"/>
+                      <joint name="jaw_1" range="-1.5707 1.5707" actuatorfrcrange="-1000 1000"/>
+                    </body>
+                    <body name="PSM1_jaw_2_link">
+                      <inertial pos="0 0 0" mass="0.01" diaginertia="0.0001 0.0001 0.0001"/>
+                      <joint name="jaw_2" range="-1.5707 1.5707" actuatorfrcrange="-1000 1000"/>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

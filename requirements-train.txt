@@ -1,0 +1,13 @@
+# DeepMind MJX & JAX Reinforcement Learning Stack for Kaggle Dual T4 GPUs
+mujoco>=3.1.5
+mujoco-mjx>=3.1.5
+jax[cuda12_pip]>=0.4.28
+flax>=0.8.4
+optax>=0.2.2
+brax>=0.10.0
+kaggle>=1.6.14
+numpy>=1.24.0
+scipy>=1.11.0
+pillow>=10.0.0
+tqdm>=4.66.0
+pyyaml>=6.0.1
