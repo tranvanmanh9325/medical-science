@@ -2,18 +2,16 @@
 ================================================================================
  Apollo Scientific Robotics Research & Biomechanics Telemetry Suite
 --------------------------------------------------------------------------------
- High-Performance MuJoCo 3.12 + Modern OpenGL Scientific Visualization Platform
- Features:
-  - Biomechanics Telemetry: CoM 3D Tracker, GRF 3D Wrench Vectors, ZMP, Support Polygon.
-  - Multi-Channel Real-time Oscilloscope (Pelvis Height, Foot Forces, CoM Velocity).
-  - 32-DoF Joint Actuator Load & Thermal Saturation Diagnostics (using real actuator forcerange).
-  - AHRS / IMU Artificial Horizon Pitch/Roll Gyroscope Widget.
-  - Active Upright Balance & Attitude Restoration Controller (Auto self-righting).
-  - Dynamic Force Perturbation Injection Test (Impulse Push Disturbance Rejection).
-  - Master HUD Toggle (TAB) & Modular Panel Toggles (D: Diag, G: Graph, T: Top, B: Dock).
-  - Multi-Layer 3D Scientific Overlays (F1-F8) & Metric Coordinate Measurement Grid.
-  - Dual Visual Themes: Dark Cyber-Lab Mode <-> Academic Paper High-Key Mode.
-  - High-DPI Scientific Snapshot Tool with Telemetry Stamp (P).
+ Nền tảng Mô phỏng & Đo lường Cơ sinh học Robot Humanoid Apollo (Chuẩn Tiếng Việt)
+ Tính năng:
+  - Đo lường Cơ sinh học: Trọng tâm (CoM) 3D, Véc-tơ Lực chân (GRF), Điểm ZMP, Đa giác thăng bằng.
+  - Đồ thị sóng dao động thời gian thực (Độ cao khung hông, Lực ép hai bàn chân, Vận tốc ngang).
+  - Bảng chẩn đoán tải lực mô-men xoắn các khớp chính (Thân, Háng, Đầu gối, Cổ chân, Khớp vai).
+  - Cảm biến góc nghiêng thân (IMU) & La bàn chân trời nhân tạo đo độ nghiêng Roll/Pitch/Yaw.
+  - Cơ chế tự phục hồi tư thế đứng thẳng chống xô ngã (Active Attitude Self-Righting).
+  - Thực nghiệm lực đẩy nhiễu loạn (Impulse Push Disturbance Rejection Test).
+  - Phím TAB duy nhất bật/tắt toàn bộ giao diện 2D (Quả cầu định hướng Gizmo luôn hiển thị cố định).
+  - Bộ hiển thị tiếng Việt Unicode chống răng cưa siêu nét đạt 240+ FPS trên GPU.
 ================================================================================
 """
 
@@ -23,18 +21,26 @@ import time
 import math
 import collections
 import numpy as np
+
+# Configure Windows console for UTF-8 Vietnamese output
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 from PIL import Image, ImageDraw, ImageFont
 import glfw
 import OpenGL.GL as gl
 import mujoco
 
+
 # ==============================================================================
-# 1. HIGH-PERFORMANCE FONT & TEXTURE RENDERING ENGINE
+# 1. BỘ KẾT XUẤT FONT TIẾNG VIỆT UNICODE ĐỘ PHÂN GIẢI CAO (OPENGL TEXTURE CACHE)
 # ==============================================================================
 class FontRenderer:
     """
-    High-performance caching font renderer using Windows TrueType fonts.
-    Caches rendered text surfaces as OpenGL 2D textures to achieve 240+ FPS.
+    Bộ kết xuất font chữ Tiếng Việt Unicode siêu nét sử dụng TrueType Font của Windows.
+    Bộ nhớ đệm texture 2D đạt tốc độ khung hình 240+ FPS không gây trễ CPU.
     """
     def __init__(self):
         self.fonts = {}
@@ -42,7 +48,6 @@ class FontRenderer:
         self.cache_order = collections.deque()
         self.max_cache_size = 500
 
-        # Load system TrueType fonts with fallbacks
         font_configs = {
             'bold': ['C:/Windows/Fonts/segoeuib.ttf', 'C:/Windows/Fonts/arialbd.ttf'],
             'regular': ['C:/Windows/Fonts/segoeui.ttf', 'C:/Windows/Fonts/arial.ttf'],
@@ -69,7 +74,7 @@ class FontRenderer:
         return ImageFont.load_default()
 
     def draw_text(self, text, x, y, font_type='regular', size=13, color=(255, 255, 255, 255), align='left'):
-        """Renders anti-aliased text at 2D orthographic screen coordinates."""
+        """Vẽ chữ tiếng Việt có dấu siêu nét lên màn hình 2D."""
         if not text:
             return 0, 0
             
@@ -79,12 +84,12 @@ class FontRenderer:
         else:
             font = self._get_font(font_type, size)
             bbox = font.getbbox(text)
-            w = max(1, bbox[2] - bbox[0] + 4)
-            h = max(1, bbox[3] - bbox[1] + 4)
+            w = max(1, bbox[2] - bbox[0] + 6)
+            h = max(1, bbox[3] - bbox[1] + 6)
             
             img = Image.new('RGBA', (w, h), (0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
-            draw.text((-bbox[0] + 2, -bbox[1] + 2), text, font=font, fill=color)
+            draw.text((-bbox[0] + 3, -bbox[1] + 3), text, font=font, fill=color)
             
             tex_id = gl.glGenTextures(1)
             gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
@@ -123,13 +128,27 @@ class FontRenderer:
 
 
 # ==============================================================================
-# 2. BIOMECHANICS & DYNAMICS TELEMETRY ENGINE
+# 2. BỘ ĐO LƯỜNG ĐỘNG LỰC HỌC & CƠ SINH HỌC THỜI GIAN THỰC
 # ==============================================================================
 class BiomechanicsTelemetry:
     """
-    Computes system Center of Mass (CoM), Ground Reaction Forces (GRF),
-    Zero Moment Point (ZMP), Support Polygon, and 32-DoF actuator torque loads.
+    Tính toán Trọng tâm (CoM), Lực phản lực mặt đất (GRF), Điểm mô-men bằng không (ZMP),
+    Đa giác thăng bằng, Góc nghiêng thân robot và Tải mô-men xoắn các khớp chính.
     """
+    # Bản đồ dịch tên kỹ thuật sang Tiếng Việt trực quan, dễ hiểu
+    JOINT_VN_NAMES = {
+        'torso_roll': 'Thân: Nghiêng Trái/Phải',
+        'torso_pitch': 'Thân: Cúi/Ngửa Trước Sau',
+        'l_hip_fe': 'Háng Trái: Gập/Duỗi Đùi',
+        'r_hip_fe': 'Háng Phải: Gập/Duỗi Đùi',
+        'l_knee_fe': 'Gối Trái: Co/Duỗi Khớp',
+        'r_knee_fe': 'Gối Phải: Co/Duỗi Khớp',
+        'l_ankle_ie': 'Cổ Chân Trái: Lắc Nghiêng',
+        'r_ankle_ie': 'Cổ Chân Phải: Lắc Nghiêng',
+        'l_shoulder_fe': 'Vai Trái: Nâng Cánh Tay',
+        'r_shoulder_fe': 'Vai Phải: Nâng Cánh Tay',
+    }
+
     def __init__(self, model):
         self.model = model
         self.total_mass = float(np.sum(model.body_mass))
@@ -138,17 +157,15 @@ class BiomechanicsTelemetry:
         self.com_vel = np.zeros(3)
         self.last_time = 0.0
 
-        # Body & Geom IDs
         self.torso_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "torso_link")
         self.pelvis_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
         self.l_sole_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "collision_l_sole")
         self.r_sole_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "collision_r_sole")
 
-        # Actuator Mapping & Grouping
         self.actuator_names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i) for i in range(model.nu)]
 
     def update(self, data):
-        # 1. Center of Mass
+        # 1. Trọng tâm toàn thân (Center of Mass)
         com = data.subtree_com[0].copy()
         dt = data.time - self.last_time
         if dt > 1e-5:
@@ -156,7 +173,7 @@ class BiomechanicsTelemetry:
         self.prev_com = com.copy()
         self.last_time = data.time
 
-        # 2. Contact Forces & GRF
+        # 2. Lực phản lực tiếp xúc mặt đất (GRF)
         contacts = []
         c_force = np.zeros(6, dtype=np.float64)
         total_grf = np.zeros(3)
@@ -170,7 +187,6 @@ class BiomechanicsTelemetry:
             c = data.contact[i]
             mujoco.mj_contactForce(self.model, data, i, c_force)
             frame = c.frame.reshape(3, 3)
-            # Force exerted on geom1 (world frame)
             f_world = frame.T @ c_force[:3]
             pos = c.pos.copy()
 
@@ -197,25 +213,25 @@ class BiomechanicsTelemetry:
                     zmp_num += np.array([pos[0] * f_world[2], pos[1] * f_world[2]])
                     zmp_den += f_world[2]
 
-        # Zero Moment Point (ZMP)
+        # Điểm mô-men bằng 0 (Zero Moment Point - ZMP)
         if zmp_den > 1e-3:
             zmp = zmp_num / zmp_den
         else:
             zmp = np.array([com[0], com[1]])
 
-        # 3. Dynamic Support Polygon (2D Convex Hull)
+        # 3. Đa giác bao lồi hỗ trợ thăng bằng (Support Polygon)
         support_poly = []
         if len(contact_points_2d) >= 3:
             support_poly = self._compute_convex_hull(contact_points_2d)
         elif len(contact_points_2d) > 0:
             support_poly = contact_points_2d
 
-        # 4. IMU Attitude & Angular Velocity (Torso Link)
+        # 4. Góc nghiêng thân robot & Cảm biến IMU
         quat = data.xquat[self.torso_id]
         roll, pitch, yaw = self._quat_to_euler(quat)
-        gyro = data.cvel[self.torso_id][:3] # Angular velocity rad/s
+        gyro = data.cvel[self.torso_id][:3]
 
-        # 5. Actuator Torques & Real Mechanical Power
+        # 5. Tải mô-men xoắn các khớp & Công suất tiêu thụ
         actuator_loads = []
         total_power = 0.0
         for i in range(self.model.nu):
@@ -226,12 +242,16 @@ class BiomechanicsTelemetry:
             power = abs(tau * qvel)
             total_power += power
 
-            # Use actuator_forcerange for true torque saturation
             frc_range = self.model.actuator_forcerange[i]
             max_tau = max(5.0, max(abs(frc_range[0]), abs(frc_range[1]))) if frc_range[1] > frc_range[0] else 100.0
             ratio = min(1.0, abs(tau) / max_tau)
+            
+            raw_name = self.actuator_names[i]
+            vn_label = self.JOINT_VN_NAMES.get(raw_name, raw_name)
+
             actuator_loads.append({
-                'name': self.actuator_names[i],
+                'raw_name': raw_name,
+                'name': vn_label,
                 'tau': tau,
                 'max_tau': max_tau,
                 'ratio': ratio,
@@ -257,7 +277,6 @@ class BiomechanicsTelemetry:
         }
 
     def _compute_convex_hull(self, points):
-        """2D Monotone Chain Convex Hull algorithm."""
         pts = sorted(set(points))
         if len(pts) <= 2:
             return pts
@@ -291,12 +310,11 @@ class BiomechanicsTelemetry:
 
 
 # ==============================================================================
-# 3. REAL-TIME MULTI-CHANNEL OSCILLOSCOPE
+# 3. ĐỒ THỊ SÓNG DAO ĐỘNG THỜI GIAN THỰC (REAL-TIME OSCILLOSCOPE)
 # ==============================================================================
 class RealtimeOscilloscope:
     """
-    High-performance vector oscilloscope rendering real-time rolling waveforms
-    of pelvis height, foot vertical forces, and Center of Mass velocity.
+    Đồ thị sóng cuộn thời gian thực theo dõi độ cao khung hông, lực chân trái / phải.
     """
     def __init__(self, buffer_size=300):
         self.buffer_size = buffer_size
@@ -317,7 +335,7 @@ class RealtimeOscilloscope:
         if len(self.times) < 2:
             return
 
-        # 1. Frosted Glass Panel Container
+        # Khung chứa kính mờ
         gl.glColor4f(0.06, 0.09, 0.14, 0.88)
         gl.glBegin(gl.GL_QUADS)
         gl.glVertex2f(x, y); gl.glVertex2f(x + w, y)
@@ -331,10 +349,10 @@ class RealtimeOscilloscope:
         gl.glVertex2f(x + w, y + h); gl.glVertex2f(x, y + h)
         gl.glEnd()
 
-        # Title
-        font_renderer.draw_text("REAL-TIME BIOMECHANICS OSCILLOSCOPE", x + 12, y + 8, 'bold', 12, (0, 240, 255, 255))
+        # Tiêu đề tiếng Việt
+        font_renderer.draw_text("ĐỒ THỊ DAO ĐỘNG THỜI GIAN THỰC", x + 12, y + 8, 'bold', 12, (0, 240, 255, 255))
         
-        # Sub-Graph 1: Pelvis Z-Tracking (Height)
+        # Kênh 1: Độ cao khung hông Z
         g1_y = y + 28
         g1_h = (h - 42) * 0.47
         self._draw_waveform_channel(
@@ -342,30 +360,30 @@ class RealtimeOscilloscope:
             data=self.pelvis_z,
             ref_val=1.016,
             min_val=0.90, max_val=1.10,
-            label=f"Root Height Z: {self.pelvis_z[-1]:.3f} m (Ref: 1.016m)",
+            label=f"Độ Cao Khung Hông: {self.pelvis_z[-1]:.3f} m (Mục tiêu: 1.016m)",
             color=(0.0, 0.94, 1.0, 1.0),
             ref_color=(0.3, 0.5, 0.7, 0.6),
             font_renderer=font_renderer
         )
 
-        # Sub-Graph 2: Foot Ground Reaction Forces (Left vs Right)
+        # Kênh 2: Lực tiếp đất chân trái & chân phải
         g2_y = g1_y + g1_h + 8
         g2_h = (h - 42) * 0.47
         self._draw_dual_waveform_channel(
             x + 10, g2_y, w - 20, g2_h,
             data1=self.fz_left, data2=self.fz_right,
             min_val=0.0, max_val=800.0,
-            label1=f"FL: {self.fz_left[-1]:.0f} N",
-            label2=f"FR: {self.fz_right[-1]:.0f} N",
+            label1=f"Chân Trái: {self.fz_left[-1]:.0f} N",
+            label2=f"Chân Phải: {self.fz_right[-1]:.0f} N",
             color1=(0.0, 1.0, 0.5, 1.0),
             color2=(1.0, 0.75, 0.0, 1.0),
             font_renderer=font_renderer
         )
 
     def _draw_waveform_channel(self, gx, gy, gw, gh, data, ref_val, min_val, max_val, label, color, ref_color, font_renderer):
-        font_renderer.draw_text(label, gx + 4, gy + 2, 'mono', 10, tuple(int(c * 255) for c in color))
+        font_renderer.draw_text(label, gx + 4, gy + 2, 'regular', 11, tuple(int(c * 255) for c in color))
 
-        cx, cy, cw, ch = gx, gy + 16, gw, gh - 18
+        cx, cy, cw, ch = gx, gy + 18, gw, gh - 20
         gl.glColor4f(0.04, 0.06, 0.10, 0.90)
         gl.glBegin(gl.GL_QUADS)
         gl.glVertex2f(cx, cy); gl.glVertex2f(cx + cw, cy)
@@ -398,10 +416,10 @@ class RealtimeOscilloscope:
         gl.glEnd()
 
     def _draw_dual_waveform_channel(self, gx, gy, gw, gh, data1, data2, min_val, max_val, label1, label2, color1, color2, font_renderer):
-        font_renderer.draw_text(label1, gx + 4, gy + 2, 'mono', 10, tuple(int(c * 255) for c in color1))
-        font_renderer.draw_text(label2, gx + 110, gy + 2, 'mono', 10, tuple(int(c * 255) for c in color2))
+        font_renderer.draw_text(label1, gx + 4, gy + 2, 'regular', 11, tuple(int(c * 255) for c in color1))
+        font_renderer.draw_text(label2, gx + 150, gy + 2, 'regular', 11, tuple(int(c * 255) for c in color2))
 
-        cx, cy, cw, ch = gx, gy + 16, gw, gh - 18
+        cx, cy, cw, ch = gx, gy + 18, gw, gh - 20
         gl.glColor4f(0.04, 0.06, 0.10, 0.90)
         gl.glBegin(gl.GL_QUADS)
         gl.glVertex2f(cx, cy); gl.glVertex2f(cx + cw, cy)
@@ -437,45 +455,36 @@ class RealtimeOscilloscope:
 
 
 # ==============================================================================
-# 4. SCIENTIFIC RESEARCH VIEWER MAIN CLASS
+# 4. VIEWER CHÍNH VÀ ĐIỀU KHIỂN TƯƠNG TÁC (CHỈ GIỮ PHÍM TAB DUY NHẤT)
 # ==============================================================================
 class BlenderMuJoCoViewer:
     """
-    Apptronik Apollo Scientific Research & Telemetry Viewer:
-    - Active Biomechanics & Attitude Stabilization Controller (Self-Righting).
-    - 3D Physics Overlays (CoM, GRF Vectors, ZMP, Support Polygon, Metric Grid).
-    - Multi-Channel Rolling Oscilloscope & 32-DoF Actuator Load Meters.
-    - AHRS / IMU Attitude Horizon Indicator.
-    - Dynamic Push Perturbation Disturbance Rejection Testing.
-    - Master Clean View (TAB) & Modular Panel Toggles (D: Diag, G: Graph, T: Top, B: Dock).
-    - Dual Visual Themes (Cyber-Lab Dark <-> Academic Paper High-Key Light).
-    - Ultra-Crisp TrueType Font Rendering & Anti-Aliased Blender Gizmo.
+    Giao diện mô phỏng phòng lab nghiên cứu khoa học Robot Humanoid Apollo:
+    - 100% Tiếng Việt trực quan, giải thích rõ ràng từng đại lượng vật lý.
+    - Duy nhất phím TAB bật/tắt toàn bộ giao diện chữ/đồ thị (Quả cầu Gizmo luôn hiển thị cố định).
+    - Bộ điều khiển cân bằng tự đứng thẳng hồi phục tư thế (Active Self-Righting PD).
     """
-    def __init__(self, model_path, width=1600, height=900, title="Apptronik Apollo - Scientific Telemetry Suite"):
+    def __init__(self, model_path, width=1600, height=900, title="Robot Apptronik Apollo - Phòng Thí Nghiệm Cơ Sinh Học"):
         self.model_path = model_path
         self.width = width
         self.height = height
         self.title = title
 
-        # Load MuJoCo Model & Data
         self.model = mujoco.MjModel.from_xml_path(model_path)
         self.data = mujoco.MjData(self.model)
 
-        # High-Fidelity Rendering Quality
         self.model.vis.quality.offsamples = 4
         self.model.vis.quality.shadowsize = 2048
 
-        # Biomechanics Engine & Oscilloscope
         self.telemetry = BiomechanicsTelemetry(self.model)
         self.oscilloscope = RealtimeOscilloscope(buffer_size=280)
 
-        # Physics Balance Parameters
         self.total_mass = float(np.sum(self.model.body_mass))
         self.gravity_comp = self.total_mass * 9.81
         self.root_body_id = 1
         self.nominal_root_z = 1.016
 
-        # Simulation Runtime State
+        # Trạng thái mô phỏng
         self.paused = False
         self.sim_speed = 1.0
         self.step_single_frame = False
@@ -484,33 +493,30 @@ class BlenderMuJoCoViewer:
         self.frame_count = 0
         self.last_fps_time = time.time()
 
-        # Push Force Perturbation State
+        # Thử nghiệm lực đẩy nhiễu loạn
         self.push_force = np.zeros(3)
         self.push_decay = 0.0
 
-        # Motion Trajectory History (Pelvis)
+        # Lịch sử quỹ đạo di chuyển
         self.trajectory_history = collections.deque(maxlen=120)
 
-        # Visual Overlay Layer Flags (F1 - F8)
-        self.layer_com = True          # F1: Center of Mass
-        self.layer_grf = True          # F2: Ground Reaction Forces
-        self.layer_zmp = True          # F3: ZMP & Support Polygon
-        self.layer_skeleton = False    # F4: Joint Frames
-        self.layer_trajectory = True   # F5: Trajectory Ribbon
-        self.layer_metric_grid = True  # F6: Metric Floor Grid
-        self.layer_collision = False   # F7: Collision Geometries
-        self.theme_academic = False    # F8: Academic Paper Light Mode vs Dark Cyber-Lab
+        # Cờ bật/tắt lớp phủ 3D vật lý (F1 - F8)
+        self.layer_com = True          # F1: Trọng tâm toàn thân CoM
+        self.layer_grf = True          # F2: Véc-tơ lực chân GRF
+        self.layer_zmp = True          # F3: Điểm ZMP & Đa giác thăng bằng
+        self.layer_skeleton = False    # F4: Hệ trục tọa độ khớp
+        self.layer_trajectory = True   # F5: Vệt dải quỹ đạo chuyển động
+        self.layer_metric_grid = True  # F6: Lưới đo khoảng cách mét
+        self.layer_collision = False   # F7: Hình học va chạm
+        self.theme_academic = False    # F8: Chế độ nền sáng / tối
 
-        # UI Visibility Toggle (Unified)
-        self.show_hud = True           # TAB: Toggle All 2D UI Overlays On/Off
+        # Cờ hiển thị giao diện 2D duy nhất (TAB)
+        self.show_hud = True           # TAB: Ẩn/Hiện toàn bộ bảng số liệu 2D
 
-
-        # Reset to standing keyframe
         self._reset_robot()
 
-        # Initialize GLFW
         if not glfw.init():
-            raise RuntimeError("Could not initialize GLFW")
+            raise RuntimeError("Không thể khởi tạo GLFW")
 
         glfw.window_hint(glfw.SAMPLES, 4)
         glfw.window_hint(glfw.DOUBLEBUFFER, glfw.TRUE)
@@ -518,15 +524,14 @@ class BlenderMuJoCoViewer:
         self.window = glfw.create_window(self.width, self.height, self.title, None, None)
         if not self.window:
             glfw.terminate()
-            raise RuntimeError("Could not create GLFW window")
+            raise RuntimeError("Không thể tạo cửa sổ GLFW")
 
         glfw.make_context_current(self.window)
-        glfw.swap_interval(1) # Hardware V-Sync
+        glfw.swap_interval(1)
 
-        # Font Renderer
         self.font_renderer = FontRenderer()
 
-        # MuJoCo Visual Structures
+        # Camera 3D MuJoCo
         self.cam = mujoco.MjvCamera()
         self.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
         self.cam.lookat[:] = [0.0, 0.0, 0.90]
@@ -538,7 +543,7 @@ class BlenderMuJoCoViewer:
         self.scn = mujoco.MjvScene(self.model, maxgeom=30000)
         self.con = mujoco.MjrContext(self.model, mujoco.mjtFontScale.mjFONTSCALE_150)
 
-        # Mouse & Navigation State
+        # Trạng thái chuột
         self.last_mouse_x = 0.0
         self.last_mouse_y = 0.0
         self.is_lmb_down = False
@@ -548,7 +553,7 @@ class BlenderMuJoCoViewer:
         self.is_ctrl_down = False
         self.drag_mode = None
 
-        # Camera Animation State
+        # Camera Animation
         self.animating = False
         self.anim_start_time = 0.0
         self.anim_duration = 0.25
@@ -557,7 +562,7 @@ class BlenderMuJoCoViewer:
         self.anim_target_az = 0.0
         self.anim_target_el = 0.0
 
-        # Gizmo Geometry State (Top-Right dedicated location)
+        # Quả cầu con quay định hướng Gizmo (Cố định góc trên bên phải)
         self.gizmo_size = 46.0
         self.gizmo_margin_x = 65.0
         self.gizmo_margin_y = 70.0
@@ -565,7 +570,6 @@ class BlenderMuJoCoViewer:
         self.gizmo_clicked_node = None
         self.hovered_node = None
 
-        # Load Gizmo Textures
         self.textures = {}
         self._load_textures()
 
@@ -583,23 +587,22 @@ class BlenderMuJoCoViewer:
         self.push_decay = 0.0
         self.trajectory_history.clear()
         mujoco.mj_forward(self.model, self.data)
-        print("[ROBOT] Reset to upright standing pose")
+        print("[ROBOT] Đã đặt lại tư thế đứng thẳng chuẩn ban đầu")
 
     def _step_physics_with_balance(self):
-        """Active standing controller + attitude PD restoration + impulse perturbation."""
+        """Bộ điều khiển cân bằng chủ động chống xô ngã + tự phục hồi tư thế đứng thẳng."""
         key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "stand")
         if key_id != -1 and self.model.key_ctrl.shape[1] == self.model.nu:
             self.data.ctrl[:] = self.model.key_ctrl[key_id]
 
-        # 1. Virtual Pelvis Suspension / Height PD Controller
+        # 1. Giảm chấn độ cao hông (Treo thẳng đứng)
         kp_z = 6000.0
         kd_z = 600.0
         z_err = self.nominal_root_z - self.data.qpos[2]
         vz = self.data.qvel[2]
         fz = self.gravity_comp + kp_z * z_err - kd_z * vz
 
-        # 2. Active Attitude / Upright Restoration (Roll, Pitch, Yaw PD control)
-        # Pulls torso back to perfectly upright [1, 0, 0, 0] quaternion
+        # 2. Bộ điều khiển phục hồi góc nghiêng thân chủ động (Roll, Pitch, Yaw PD)
         q = self.data.qpos[3:7]
         kp_rot = 900.0
         kd_rot = 140.0
@@ -624,10 +627,10 @@ class BlenderMuJoCoViewer:
             self.trajectory_history.append(self.data.qpos[:3].copy())
 
     def inject_perturbation(self, fx=0.0, fy=0.0, duration=0.25):
-        """Injects a horizontal disturbance force impulse (Push Test)."""
+        """Tác dụng lực đẩy xô thử nghiệm cân bằng."""
         self.push_force = np.array([fx, fy, 0.0])
         self.push_decay = duration
-        print(f"[PERTURBATION] Injected push force: [{fx:.1f}, {fy:.1f}, 0.0] N for {duration}s")
+        print(f"[THỬ NGHIỆM LỰC ĐẨY] Tác dụng lực: [{fx:.1f}, {fy:.1f}, 0.0] N trong {duration}s")
 
     def _load_textures(self):
         assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
@@ -790,22 +793,21 @@ class BlenderMuJoCoViewer:
 
     def _on_key(self, window, key, scancode, action, mods):
         if action == glfw.PRESS:
-            # 1. Master HUD Visibility Toggle (Single Unified Key)
+            # Phím TAB duy nhất: Ẩn/Hiện toàn bộ giao diện 2D
             if key == glfw.KEY_TAB:
                 self.show_hud = not self.show_hud
-                print(f"[HUD] All UI Panels: {'SHOWN' if self.show_hud else 'HIDDEN (Clean 3D View)'}")
+                print(f"[GIAO DIỆN] Toàn bộ bảng số liệu 2D: {'HIỆN' if self.show_hud else 'ẨN (Toàn cảnh 3D)'}")
 
-            # 2. Simulation Controls
+            # Điều khiển mô phỏng
             elif key == glfw.KEY_SPACE:
                 self.paused = not self.paused
-                print(f"[SIMULATION] {'PAUSED' if self.paused else 'RUNNING'}")
+                print(f"[MÔ PHỎNG] {'TẠM DỪNG' if self.paused else 'ĐANG CHẠY'}")
             elif key == glfw.KEY_N:
                 self.step_single_frame = True
             elif key == glfw.KEY_R:
                 self._reset_robot()
 
-
-            # 3. Speed Controls
+            # Điều chỉnh tốc độ mô phỏng
             elif key == glfw.KEY_1 and not mods:
                 self.sim_speed = 0.1
             elif key == glfw.KEY_2 and not mods:
@@ -815,7 +817,7 @@ class BlenderMuJoCoViewer:
             elif key == glfw.KEY_4 and not mods:
                 self.sim_speed = 1.0
 
-            # 4. Disturbance Rejection Testing (Push Force)
+            # Thử nghiệm lực đẩy xô robot
             elif key == glfw.KEY_LEFT:
                 self.inject_perturbation(fy=140.0)
             elif key == glfw.KEY_RIGHT:
@@ -827,38 +829,38 @@ class BlenderMuJoCoViewer:
             elif key == glfw.KEY_F:
                 self.inject_perturbation(fx=120.0, fy=100.0)
 
-            # 5. Layer Toggles (F1 - F8)
+            # Phím F1 - F8 bật/tắt các lớp phủ đo lường 3D
             elif key == glfw.KEY_F1:
                 self.layer_com = not self.layer_com
-                print(f"[LAYER] CoM: {self.layer_com}")
+                print(f"[LỚP PHỦ] Trọng tâm CoM: {self.layer_com}")
             elif key == glfw.KEY_F2:
                 self.layer_grf = not self.layer_grf
-                print(f"[LAYER] GRF Vectors: {self.layer_grf}")
+                print(f"[LỚP PHỦ] Mũi tên lực chân GRF: {self.layer_grf}")
             elif key == glfw.KEY_F3:
                 self.layer_zmp = not self.layer_zmp
-                print(f"[LAYER] ZMP & Support Polygon: {self.layer_zmp}")
+                print(f"[LỚP PHỦ] Đa giác thăng bằng & Điểm ZMP: {self.layer_zmp}")
             elif key == glfw.KEY_F4:
                 self.layer_skeleton = not self.layer_skeleton
-                print(f"[LAYER] Kinematics Skeleton: {self.layer_skeleton}")
+                print(f"[LỚP PHỦ] Hệ trục khớp: {self.layer_skeleton}")
             elif key == glfw.KEY_F5:
                 self.layer_trajectory = not self.layer_trajectory
-                print(f"[LAYER] Trajectory Ribbon: {self.layer_trajectory}")
+                print(f"[LỚP PHỦ] Vệt quỹ đạo di chuyển: {self.layer_trajectory}")
             elif key == glfw.KEY_F6:
                 self.layer_metric_grid = not self.layer_metric_grid
-                print(f"[LAYER] Metric Grid: {self.layer_metric_grid}")
+                print(f"[LỚP PHỦ] Lưới đo mét: {self.layer_metric_grid}")
             elif key == glfw.KEY_F7:
                 self.layer_collision = not self.layer_collision
                 self.opt.flags[mujoco.mjtVisFlag.mjVIS_COLLISION] = int(self.layer_collision)
-                print(f"[LAYER] Collision Geoms: {self.layer_collision}")
+                print(f"[LỚP PHỦ] Khối va chạm: {self.layer_collision}")
             elif key == glfw.KEY_F8:
                 self.theme_academic = not self.theme_academic
-                print(f"[THEME] Academic Paper Light Mode: {self.theme_academic}")
+                print(f"[CHẾ ĐỘ NỀN] Nền sáng bài báo: {self.theme_academic}")
 
-            # 6. High-DPI Scientific Snapshot
+            # Chụp ảnh báo cáo nghiên cứu
             elif key == glfw.KEY_P:
                 self._capture_scientific_snapshot()
 
-            # 7. Blender Standard Numpad View Shortcuts
+            # Phím Numpad đổi góc nhìn chuẩn Blender
             elif key in (glfw.KEY_KP_1, glfw.KEY_1) and (mods & glfw.MOD_CONTROL):
                 self._animate_to_view(90.0, 0.0)
             elif key in (glfw.KEY_KP_1, glfw.KEY_1) and (mods & glfw.MOD_SHIFT):
@@ -869,7 +871,7 @@ class BlenderMuJoCoViewer:
                 self._animate_to_view(270.0, 89.9 if (mods & glfw.MOD_CONTROL) else -89.9)
 
     def _capture_scientific_snapshot(self):
-        """Captures a clean scientific figure with telemetry stamps."""
+        """Chụp ảnh số liệu khoa học độ phân giải cao."""
         w, h = glfw.get_framebuffer_size(self.window)
         gl.glPixelStorei(gl.GL_PACK_ALIGNMENT, 1)
         pixels = gl.glReadPixels(0, 0, w, h, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE)
@@ -877,9 +879,9 @@ class BlenderMuJoCoViewer:
         
         os.makedirs("pic", exist_ok=True)
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        out_path = os.path.join("pic", f"scientific_telemetry_{timestamp}.png")
+        out_path = os.path.join("pic", f"anh_chup_nghien_cuu_{timestamp}.png")
         img.save(out_path, "PNG")
-        print(f"[SNAPSHOT] Saved scientific figure to: {out_path}")
+        print(f"[CHỤP ẢNH] Đã lưu ảnh báo cáo khoa học vào: {out_path}")
 
     def _update_camera_animation(self):
         if not self.animating:
@@ -895,23 +897,21 @@ class BlenderMuJoCoViewer:
             self.cam.elevation = self.anim_start_el + (self.anim_target_el - self.anim_start_el) * ease
 
     # ==========================================================================
-    # 5. 3D SCIENTIFIC VISUAL OVERLAYS (INJECTED INTO MUJOCO SCENE)
+    # 5. CÁC LỚP PHỦ 3D ĐO LƯỜNG VẬT LÝ TRONG KHÔNG GIAN
     # ==========================================================================
     def _inject_3d_scientific_overlays(self, telem):
-        """Injects 3D physics vectors, CoM sphere, GRF arrows, and ZMP into MjvScene."""
         scn = self.scn
 
-        # 1. Center of Mass (CoM) Visualization
+        # 1. Trọng tâm toàn thân CoM
         if self.layer_com:
             com = telem['com']
-            # CoM Glowing Sphere
             if scn.ngeom < scn.maxgeom:
                 g = scn.geoms[scn.ngeom]
                 mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_SPHERE, np.array([0.045, 0.045, 0.045]), com, np.eye(3).flatten(), np.array([0.0, 0.94, 1.0, 0.92]))
                 g.category = mujoco.mjtCatBit.mjCAT_DECOR
                 scn.ngeom += 1
 
-            # CoM Plumb-Line to Ground
+            # Đường dọi trọng lực xuống sàn
             if scn.ngeom < scn.maxgeom:
                 g = scn.geoms[scn.ngeom]
                 mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_CAPSULE, np.zeros(3), np.zeros(3), np.eye(3).flatten(), np.array([0.0, 0.94, 1.0, 0.45]))
@@ -919,14 +919,14 @@ class BlenderMuJoCoViewer:
                 g.category = mujoco.mjtCatBit.mjCAT_DECOR
                 scn.ngeom += 1
 
-            # CoM Ground Shadow Disk
+            # Điểm bóng tiếp đất trọng tâm
             if scn.ngeom < scn.maxgeom:
                 g = scn.geoms[scn.ngeom]
                 mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_CYLINDER, np.array([0.08, 0.002, 0.002]), np.array([com[0], com[1], 0.001]), np.eye(3).flatten(), np.array([0.0, 0.8, 1.0, 0.35]))
                 g.category = mujoco.mjtCatBit.mjCAT_DECOR
                 scn.ngeom += 1
 
-            # CoM Velocity Vector Arrow
+            # Véc-tơ vận tốc trọng tâm
             v_norm = np.linalg.norm(telem['com_vel'])
             if v_norm > 0.05 and scn.ngeom < scn.maxgeom:
                 v_end = com + telem['com_vel'] * 0.4
@@ -936,7 +936,7 @@ class BlenderMuJoCoViewer:
                 g.category = mujoco.mjtCatBit.mjCAT_DECOR
                 scn.ngeom += 1
 
-        # 2. Ground Reaction Force (GRF) 3D Vectors
+        # 2. Véc-tơ lực tiếp xúc mặt đất (GRF)
         if self.layer_grf:
             for c in telem['contacts']:
                 if c['mag'] > 5.0 and scn.ngeom < scn.maxgeom:
@@ -946,15 +946,14 @@ class BlenderMuJoCoViewer:
                     f_dir = f_vec / (c['mag'] + 1e-6)
                     target = pos + f_dir * arrow_len
 
-                    # Heatmap color based on force magnitude
                     if c['mag'] < 300:
-                        rgba = np.array([0.0, 0.94, 1.0, 0.90]) # Cyan
+                        rgba = np.array([0.0, 0.94, 1.0, 0.90])
                     elif c['mag'] < 650:
-                        rgba = np.array([0.0, 1.0, 0.45, 0.95]) # Emerald
+                        rgba = np.array([0.0, 1.0, 0.45, 0.95])
                     elif c['mag'] < 950:
-                        rgba = np.array([1.0, 0.75, 0.0, 0.95]) # Amber
+                        rgba = np.array([1.0, 0.75, 0.0, 0.95])
                     else:
-                        rgba = np.array([1.0, 0.20, 0.20, 1.0])  # Crimson
+                        rgba = np.array([1.0, 0.20, 0.20, 1.0])
 
                     g = scn.geoms[scn.ngeom]
                     mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_ARROW, np.zeros(3), np.zeros(3), np.eye(3).flatten(), rgba)
@@ -962,7 +961,7 @@ class BlenderMuJoCoViewer:
                     g.category = mujoco.mjtCatBit.mjCAT_DECOR
                     scn.ngeom += 1
 
-        # 3. Support Polygon & Zero Moment Point (ZMP)
+        # 3. Đa giác thăng bằng Support Polygon & Điểm ZMP
         if self.layer_zmp:
             poly = telem['support_poly']
             if len(poly) >= 2:
@@ -976,7 +975,7 @@ class BlenderMuJoCoViewer:
                         g.category = mujoco.mjtCatBit.mjCAT_DECOR
                         scn.ngeom += 1
 
-            # ZMP Pulsing Sphere
+            # Điểm ZMP phát sáng
             zmp = telem['zmp']
             if scn.ngeom < scn.maxgeom:
                 g = scn.geoms[scn.ngeom]
@@ -984,7 +983,7 @@ class BlenderMuJoCoViewer:
                 g.category = mujoco.mjtCatBit.mjCAT_DECOR
                 scn.ngeom += 1
 
-        # 4. Perturbation Disturbance Force Vector Arrow (Push Test)
+        # 4. Mũi tên hiển thị lực đẩy xô thử nghiệm
         if self.push_decay > 0.0 and scn.ngeom < scn.maxgeom:
             torso_pos = self.data.xpos[self.telemetry.torso_id]
             f_norm = np.linalg.norm(self.push_force[:2])
@@ -997,7 +996,7 @@ class BlenderMuJoCoViewer:
                 g.category = mujoco.mjtCatBit.mjCAT_DECOR
                 scn.ngeom += 1
 
-        # 5. Motion Trajectory Ribbon
+        # 5. Vệt dải quỹ đạo di chuyển
         if self.layer_trajectory and len(self.trajectory_history) >= 2:
             pts = list(self.trajectory_history)
             for i in range(len(pts) - 1):
@@ -1009,7 +1008,7 @@ class BlenderMuJoCoViewer:
                     g.category = mujoco.mjtCatBit.mjCAT_DECOR
                     scn.ngeom += 1
 
-        # 6. Metric Coordinate Ground Measurement Rings
+        # 6. Vòng tròn đo khoảng cách mét trên sàn
         if self.layer_metric_grid:
             for radius in [0.5, 1.0, 1.5, 2.0]:
                 if scn.ngeom < scn.maxgeom:
@@ -1019,10 +1018,10 @@ class BlenderMuJoCoViewer:
                     scn.ngeom += 1
 
     # ==========================================================================
-    # 6. 2D SCIENTIFIC HEADS-UP DISPLAY (HUD) & GLASSMORPHISM PANELS
+    # 6. GIAO DIỆN HEADS-UP DISPLAY (HUD) 100% TIẾNG VIỆT
     # ==========================================================================
     def _draw_top_scientific_ribbon(self, telem):
-        """Top Telemetry Ribbon: Real-time clock, Sim FPS, Power, and Controller Status."""
+        """Thanh thông số khoa học trên cùng."""
         w, h = self.width, self.height
         rx, ry, rw, rh = 16, 14, w - 32, 40
 
@@ -1049,27 +1048,27 @@ class BlenderMuJoCoViewer:
         gl.glEnd()
 
         fr = self.font_renderer
-        fr.draw_text("APOLLO NEURO-LAB", rx + 36, ry + 11, 'bold', 15, (0, 240, 255, 255))
+        fr.draw_text("PHÒNG THÍ NGHIỆM ROBOT APOLLO", rx + 36, ry + 11, 'bold', 14, (0, 240, 255, 255))
 
         sim_t = self.data.time
         mins = int(sim_t // 60)
         secs = sim_t % 60
-        t_str = f"TIME: {mins:02d}:{secs:05.2f}s"
-        fr.draw_text(t_str, rx + 195, ry + 13, 'mono', 12, (200, 220, 245, 255))
+        t_str = f"THỜI GIAN: {mins:02d}:{secs:05.2f}s"
+        fr.draw_text(t_str, rx + 295, ry + 12, 'mono', 12, (200, 220, 245, 255))
 
-        fps_str = f"SIM: {self.physics_fps:.0f}Hz | RENDER: {self.render_fps:.0f}FPS | RTF: {self.sim_speed:.2f}x"
-        fr.draw_text(fps_str, rx + 360, ry + 13, 'mono', 12, (160, 200, 240, 255))
+        fps_str = f"VẬT LÝ: {self.physics_fps:.0f}Hz | ĐỒ HỌA: {self.render_fps:.0f} FPS | TỐC ĐỘ: {self.sim_speed:.2f}x"
+        fr.draw_text(fps_str, rx + 480, ry + 12, 'mono', 12, (160, 200, 240, 255))
 
-        pwr_str = f"POWER: {telem['total_power']:.1f}W | MASS: {self.total_mass:.1f}kg"
-        fr.draw_text(pwr_str, rx + 680, ry + 13, 'mono', 12, (180, 240, 180, 255))
+        pwr_str = f"CÔNG SUẤT: {telem['total_power']:.1f}W | NẶNG: {self.total_mass:.1f}kg"
+        fr.draw_text(pwr_str, rx + 830, ry + 12, 'mono', 12, (180, 240, 180, 255))
 
-        badge_text = "PAUSED" if self.paused else ("PUSH PERTURBATION" if self.push_decay > 0.0 else "ACTIVE PD SUSPENSION (STABLE)")
+        badge_text = "ĐANG TẠM DỪNG" if self.paused else ("ĐANG THỬ LỰC ĐẨY" if self.push_decay > 0.0 else "CÂN BẰNG TỰ ĐỘNG (ỔN ĐỊNH)")
         badge_color = (255, 120, 0, 255) if (self.paused or self.push_decay > 0.0) else (0, 255, 140, 255)
-        fr.draw_text(badge_text, rx + rw - 250, ry + 13, 'bold', 12, badge_color)
+        fr.draw_text(badge_text, rx + rw - 260, ry + 12, 'bold', 12, badge_color)
 
     def _draw_left_diagnostic_dashboard(self, telem):
-        """Left Diagnostics Panel: AHRS IMU Horizon, Euler Angles, and Actuator Torque Loads."""
-        px, py, pw, ph = 16, 64, 330, self.height - 110
+        """Bảng chẩn đoán bên trái (100% Tiếng Việt dễ hiểu)."""
+        px, py, pw, ph = 16, 64, 350, self.height - 110
         fr = self.font_renderer
 
         gl.glColor4f(0.06, 0.09, 0.14, 0.88)
@@ -1085,11 +1084,11 @@ class BlenderMuJoCoViewer:
         gl.glVertex2f(px + pw, py + ph); gl.glVertex2f(px, py + ph)
         gl.glEnd()
 
-        fr.draw_text("SYSTEM DYNAMICS & ACTUATION", px + 14, py + 10, 'bold', 13, (0, 240, 255, 255))
+        fr.draw_text("CHẨN ĐOÁN ĐỘNG LỰC HỌC & KHỚP", px + 14, py + 10, 'bold', 13, (0, 240, 255, 255))
 
-        # --- SECTION 1: AHRS IMU ATTITUDE & ARTIFICIAL HORIZON ---
+        # --- PHẦN 1: CẢM BIẾN GÓC NGHIÊNG THÂN (IMU) ---
         sec1_y = py + 34
-        fr.draw_text("IMU ATTITUDE ESTIMATOR", px + 14, sec1_y, 'bold', 11, (140, 180, 220, 255))
+        fr.draw_text("1. CẢM BIẾN GÓC NGHIÊNG THÂN (IMU)", px + 14, sec1_y, 'bold', 11, (140, 180, 220, 255))
         
         hx, hy, hr = px + 65, sec1_y + 48, 36
         roll = telem['roll']
@@ -1123,23 +1122,23 @@ class BlenderMuJoCoViewer:
             gl.glVertex2f(hx + hr * math.cos(th), hy + hr * math.sin(th))
         gl.glEnd()
 
-        fr.draw_text(f"ROLL : {roll:+05.1f}°", px + 125, sec1_y + 24, 'mono', 11, (200, 230, 255, 255))
-        fr.draw_text(f"PITCH: {pitch:+05.1f}°", px + 125, sec1_y + 42, 'mono', 11, (200, 230, 255, 255))
-        fr.draw_text(f"YAW  : {telem['yaw']:+05.1f}°", px + 125, sec1_y + 60, 'mono', 11, (200, 230, 255, 255))
-        fr.draw_text(f"GYRO : [{telem['gyro'][0]:+04.0f}, {telem['gyro'][1]:+04.0f}, {telem['gyro'][2]:+04.0f}] °/s", px + 14, sec1_y + 92, 'mono', 10, (140, 180, 220, 255))
+        fr.draw_text(f"Nghiêng T/P: {roll:+05.1f}°", px + 125, sec1_y + 24, 'regular', 11, (200, 230, 255, 255))
+        fr.draw_text(f"Cúi/Ngửa   : {pitch:+05.1f}°", px + 125, sec1_y + 42, 'regular', 11, (200, 230, 255, 255))
+        fr.draw_text(f"Xoay Thân  : {telem['yaw']:+05.1f}°", px + 125, sec1_y + 60, 'regular', 11, (200, 230, 255, 255))
+        fr.draw_text(f"Vận tốc xoay: [{telem['gyro'][0]:+03.0f}, {telem['gyro'][1]:+03.0f}, {telem['gyro'][2]:+03.0f}] °/s", px + 14, sec1_y + 92, 'regular', 10, (140, 180, 220, 255))
 
-        # --- SECTION 2: BIOMECHANICS TELEMETRY ---
+        # --- PHẦN 2: TRỌNG TÂM & LỰC CHÂN TIẾP ĐẤT ---
         sec2_y = sec1_y + 114
-        fr.draw_text("BIOMECHANICS SUMMARY", px + 14, sec2_y, 'bold', 11, (140, 180, 220, 255))
+        fr.draw_text("2. TRỌNG TÂM & LỰC TIẾP ĐẤT", px + 14, sec2_y, 'bold', 11, (140, 180, 220, 255))
 
         com = telem['com']
-        fr.draw_text(f"CoM Pos: [{com[0]:+.3f}, {com[1]:+.3f}, {com[2]:.3f}] m", px + 14, sec2_y + 18, 'mono', 11, (0, 240, 255, 255))
-        fr.draw_text(f"GRF Total: {np.linalg.norm(telem['total_grf']):.0f} N (100.0%)", px + 14, sec2_y + 34, 'mono', 11, (180, 240, 180, 255))
-        fr.draw_text(f"Foot Balance: L:{telem['fz_left']:.0f}N | R:{telem['fz_right']:.0f}N", px + 14, sec2_y + 50, 'mono', 11, (255, 210, 80, 255))
+        fr.draw_text(f"Vị trí Trọng tâm: [X:{com[0]:+.2f}, Y:{com[1]:+.2f}, Cao:{com[2]:.2f}]m", px + 14, sec2_y + 18, 'regular', 11, (0, 240, 255, 255))
+        fr.draw_text(f"Tổng lực nâng mặt đất: {np.linalg.norm(telem['total_grf']):.0f} N (100.0%)", px + 14, sec2_y + 34, 'regular', 11, (180, 240, 180, 255))
+        fr.draw_text(f"Tải lực 2 chân: Trái {telem['fz_left']:.0f}N | Phải {telem['fz_right']:.0f}N", px + 14, sec2_y + 50, 'regular', 11, (255, 210, 80, 255))
 
-        # --- SECTION 3: 32-DOF ACTUATOR TORQUE METERS ---
+        # --- PHẦN 3: TẢI LỰC MÔ-MEN XOẮN CÁC KHỚP CHÍNH ---
         sec3_y = sec2_y + 74
-        fr.draw_text("32-DOF ACTUATOR TORQUE LOAD", px + 14, sec3_y, 'bold', 11, (140, 180, 220, 255))
+        fr.draw_text("3. TẢI MÔ-MEN XOẮN CÁC KHỚP CHÍNH", px + 14, sec3_y, 'bold', 11, (140, 180, 220, 255))
 
         curr_y = sec3_y + 20
         loads = telem['actuator_loads']
@@ -1149,10 +1148,11 @@ class BlenderMuJoCoViewer:
         ]
 
         for item in loads:
-            if item['name'] in display_joints:
-                fr.draw_text(item['name'], px + 14, curr_y, 'mono', 10, (210, 230, 250, 255))
+            if item['raw_name'] in display_joints:
+                fr.draw_text(item['name'], px + 14, curr_y, 'regular', 10, (210, 230, 250, 255))
                 
-                bx, by, bw, bh = px + 125, curr_y + 2, 120, 10
+                # Thanh đo tỉ lệ tải
+                bx, by, bw, bh = px + 195, curr_y + 2, 85, 10
                 gl.glColor4f(0.12, 0.18, 0.28, 0.90)
                 gl.glBegin(gl.GL_QUADS)
                 gl.glVertex2f(bx, by); gl.glVertex2f(bx + bw, by)
@@ -1175,11 +1175,11 @@ class BlenderMuJoCoViewer:
                 gl.glVertex2f(bx + fill_w, by + bh); gl.glVertex2f(bx, by + bh)
                 gl.glEnd()
 
-                fr.draw_text(f"{abs(item['tau']):.1f}Nm", px + 252, curr_y, 'mono', 10, (180, 210, 240, 255))
+                fr.draw_text(f"{abs(item['tau']):.1f}Nm", px + 288, curr_y, 'mono', 10, (180, 210, 240, 255))
                 curr_y += 18
 
     def _draw_bottom_controls_dock(self):
-        """Bottom Interactive Controls Dock & Layer Shortcut Badges."""
+        """Thanh phím tắt điều khiển dưới đáy (Tiếng Việt)."""
         w, h = self.width, self.height
         dx, dy, dw, dh = 16, h - 42, w - 32, 32
         fr = self.font_renderer
@@ -1198,23 +1198,22 @@ class BlenderMuJoCoViewer:
         gl.glEnd()
 
         shortcuts = [
-            ("SPACE", "Play/Pause"),
-            ("N", "Step 1"),
-            ("1-4", f"Speed:{self.sim_speed}x"),
-            ("ARROWS/F", "Push Test"),
-            ("TAB", f"All UI:{'ON' if self.show_hud else 'OFF'}"),
-            ("F1-F6", "3D Overlays"),
-            ("F8", f"Theme:{'LIGHT' if self.theme_academic else 'DARK'}"),
-            ("P", "Snapshot"),
-            ("R", "Reset Pose")
+            ("SPACE", "Chạy/Dừng"),
+            ("N", "Bước 1 Khung"),
+            ("1-4", f"Tốc độ:{self.sim_speed}x"),
+            ("MŨI TÊN/F", "Thử Đẩy Xô"),
+            ("TAB", "Ẩn/Hiện Bảng Số Liệu"),
+            ("F1-F6", "Lớp Phủ 3D"),
+            ("F8", f"Giao diện:{'SÁNG' if self.theme_academic else 'TỐI'}"),
+            ("P", "Chụp Ảnh"),
+            ("R", "Đặt Lại Tư Thế")
         ]
-
 
         bx = dx + 12
         for key, desc in shortcuts:
             label = f"[{key}] {desc}"
-            fr.draw_text(label, bx, dy + 8, 'mono', 11, (160, 200, 240, 255))
-            bx += len(label) * 7.4 + 10
+            fr.draw_text(label, bx, dy + 8, 'regular', 11, (160, 200, 240, 255))
+            bx += len(label) * 7.5 + 10
 
     def _draw_textured_quad(self, cx, cy, size, tex_key, alpha=1.0):
         if tex_key not in self.textures:
@@ -1237,10 +1236,10 @@ class BlenderMuJoCoViewer:
         cx, cy = self.get_gizmo_center()
         nodes = self._get_gizmo_axis_nodes()
 
-        # Trackball Disc
+        # Đĩa xoay nền
         self._draw_textured_quad(cx, cy, self.gizmo_size * 2.0, 'DISC', alpha=0.85)
 
-        # Axis Rods
+        # Các trục nối
         for node in nodes:
             rod_color = (node['color'][0], node['color'][1], node['color'][2], 0.95 if node['label'] else 0.40)
             gl.glLineWidth(3.0 if node['label'] else 1.8)
@@ -1250,10 +1249,10 @@ class BlenderMuJoCoViewer:
             gl.glVertex2f(node['sx'], node['sy'])
             gl.glEnd()
 
-        # Center Pivot Dot
+        # Điểm tâm
         self._draw_textured_quad(cx, cy, 14.0, 'PIVOT', alpha=1.0)
 
-        # Axis Pins (+X, +Y, +Z, -X, -Y, -Z)
+        # Các đầu pin trục (+X, +Y, +Z, -X, -Y, -Z)
         for node in nodes:
             is_hovered = (self.hovered_node == node['name'])
             scale = 1.18 if is_hovered else 1.0
@@ -1261,18 +1260,17 @@ class BlenderMuJoCoViewer:
             self._draw_textured_quad(node['sx'], node['sy'], pin_size, node['name'], alpha=1.0)
 
     # ==========================================================================
-    # 7. MAIN SIMULATION & RENDERING LOOP
+    # 7. VÒNG LẶP MÔ PHỎNG & HIỂN THỊ ĐỒ HỌA
     # ==========================================================================
     def run(self):
         print("==================================================================")
-        print(" [APPTRONIK APOLLO] Scientific Research & Telemetry Suite         ")
-        print(" - Active Standing Stability Controller: Enabled (Self-Righting)  ")
-        print(" - Physics Telemetry: CoM 3D, GRF Vectors, ZMP, Support Polygon   ")
-        print(" - Master Clean View: TAB (Toggle ALL HUD On/Off)                ")
-        print(" - Modular Panels: D (Diagnostics) | G (Graph) | T (Top) | B (Dock)")
-        print(" - Dynamic Force Perturbation: Arrow Keys / F (Push Disturbance) ")
-        print(" - Overlays: F1(CoM) F2(GRF) F3(ZMP) F4(Skel) F5(Trail) F6(Grid) ")
-        print(" - Snapshot: P (Save Scientific Figure) | F8 (Dark/Light Theme)   ")
+        print(" [APPTRONIK APOLLO] Phòng Thí Nghiệm Đo Lường Cơ Sinh Học         ")
+        print(" - Bộ điều khiển cân bằng chủ động: BẬT (Tự động đứng thẳng)     ")
+        print(" - Đo lường vật lý: Trọng tâm 3D, Véc-tơ lực chân, Điểm ZMP      ")
+        print(" - Phím TAB duy nhất: Ẩn/Hiện toàn bộ bảng thông số & đồ thị 2D   ")
+        print(" - Quả cầu Gizmo Blender X/Y/Z: Luôn hiển thị cố định góc phải   ")
+        print(" - Thử nghiệm lực đẩy xô: Phím Mũi Tên hoặc phím F               ")
+        print(" - Chụp ảnh báo cáo: Phím P | Đổi nền sáng/tối: Phím F8          ")
         print("==================================================================")
 
         sim_accumulator = 0.0
@@ -1285,7 +1283,6 @@ class BlenderMuJoCoViewer:
             frame_dt = now - last_frame_time
             last_frame_time = now
 
-            # FPS Calculation
             self.frame_count += 1
             if now - self.last_fps_time >= 0.5:
                 self.render_fps = self.frame_count / (now - self.last_fps_time)
@@ -1295,7 +1292,6 @@ class BlenderMuJoCoViewer:
 
             self._update_camera_animation()
 
-            # Physics Stepping with Speed Scaling
             if not self.paused:
                 sim_accumulator += frame_dt * self.sim_speed
                 steps_taken = 0
@@ -1307,7 +1303,6 @@ class BlenderMuJoCoViewer:
                 self._step_physics_with_balance()
                 self.step_single_frame = False
 
-            # Compute Biomechanics Telemetry
             telem = self.telemetry.update(self.data)
             self.oscilloscope.append(
                 self.data.time,
@@ -1317,18 +1312,15 @@ class BlenderMuJoCoViewer:
                 telem['com_vel'][1]
             )
 
-            # 1. Render 3D MuJoCo Scene
+            # 1. Kết xuất không gian 3D MuJoCo
             w, h = glfw.get_framebuffer_size(self.window)
             viewport = mujoco.MjrRect(0, 0, w, h)
 
             mujoco.mjv_updateScene(self.model, self.data, self.opt, None, self.cam, mujoco.mjtCatBit.mjCAT_ALL, self.scn)
-            
-            # Inject 3D Scientific Overlays
             self._inject_3d_scientific_overlays(telem)
-
             mujoco.mjr_render(viewport, self.scn, self.con)
 
-            # 2. 2D Orthographic Overlay Pass (Always Active for Gizmo)
+            # 2. Kết xuất giao diện 2D Overlay
             gl.glUseProgram(0)
             gl.glBindVertexArray(0)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
@@ -1351,17 +1343,17 @@ class BlenderMuJoCoViewer:
             gl.glEnable(gl.GL_BLEND)
             gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
-            # Render Telemetry HUD Panels (Toggled by TAB)
+            # Hiển thị các bảng số liệu khi show_hud = True
             if self.show_hud:
                 self._draw_top_scientific_ribbon(telem)
                 self._draw_left_diagnostic_dashboard(telem)
                 
-                osc_w = min(420, self.width - 370)
+                osc_w = min(440, self.width - 390)
                 self.oscilloscope.draw(self.width - osc_w - 16, 125, osc_w, 240, self.font_renderer)
 
                 self._draw_bottom_controls_dock()
 
-            # Always Render Blender 3D Orientation Gizmo (Never Hidden)
+            # Quả cầu định hướng Gizmo luôn luôn hiển thị cố định ở góc trên bên phải
             self._draw_gizmo_overlay()
 
             gl.glDisable(gl.GL_BLEND)
@@ -1373,11 +1365,8 @@ class BlenderMuJoCoViewer:
             gl.glPopMatrix()
             gl.glMatrixMode(gl.GL_MODELVIEW)
 
-
-            # 3. Swap Buffers
             glfw.swap_buffers(self.window)
 
-        # Cleanup
         glfw.destroy_window(self.window)
         glfw.terminate()
 

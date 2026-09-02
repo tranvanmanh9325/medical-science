@@ -2,11 +2,19 @@ import os
 import sys
 import time
 import math
+import collections
 import numpy as np
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 from PIL import Image, ImageDraw, ImageFont
 import glfw
 import OpenGL.GL as gl
 import mujoco
+
 
 from main import BlenderMuJoCoViewer
 
@@ -68,13 +76,14 @@ def capture_viewer_frame(output_path=None):
         viewer._draw_top_scientific_ribbon(telem)
         viewer._draw_left_diagnostic_dashboard(telem)
         
-        osc_w = min(420, viewer.width - 370)
+        osc_w = min(440, viewer.width - 390)
         viewer.oscilloscope.draw(viewer.width - osc_w - 16, 125, osc_w, 240, viewer.font_renderer)
 
         viewer._draw_bottom_controls_dock()
 
     # Always Render Blender 3D Orientation Gizmo (Never Hidden)
     viewer._draw_gizmo_overlay()
+
 
 
 
