@@ -8,7 +8,9 @@
   - Multi-Channel Real-time Oscilloscope (Pelvis Height, Foot Forces, CoM Velocity).
   - 32-DoF Joint Actuator Load & Thermal Saturation Diagnostics (using real actuator forcerange).
   - AHRS / IMU Artificial Horizon Pitch/Roll Gyroscope Widget.
+  - Active Upright Balance & Attitude Restoration Controller (Auto self-righting).
   - Dynamic Force Perturbation Injection Test (Impulse Push Disturbance Rejection).
+  - Master HUD Toggle (TAB) & Modular Panel Toggles (D: Diag, G: Graph, T: Top, B: Dock).
   - Multi-Layer 3D Scientific Overlays (F1-F8) & Metric Coordinate Measurement Grid.
   - Dual Visual Themes: Dark Cyber-Lab Mode <-> Academic Paper High-Key Mode.
   - High-DPI Scientific Snapshot Tool with Telemetry Stamp (P).
@@ -361,10 +363,8 @@ class RealtimeOscilloscope:
         )
 
     def _draw_waveform_channel(self, gx, gy, gw, gh, data, ref_val, min_val, max_val, label, color, ref_color, font_renderer):
-        # Header text
         font_renderer.draw_text(label, gx + 4, gy + 2, 'mono', 10, tuple(int(c * 255) for c in color))
 
-        # Canvas Box
         cx, cy, cw, ch = gx, gy + 16, gw, gh - 18
         gl.glColor4f(0.04, 0.06, 0.10, 0.90)
         gl.glBegin(gl.GL_QUADS)
@@ -372,7 +372,6 @@ class RealtimeOscilloscope:
         gl.glVertex2f(cx + cw, cy + ch); gl.glVertex2f(cx, cy + ch)
         gl.glEnd()
 
-        # Grid lines
         gl.glLineWidth(1.0)
         gl.glColor4f(0.15, 0.22, 0.35, 0.45)
         gl.glBegin(gl.GL_LINES)
@@ -381,7 +380,6 @@ class RealtimeOscilloscope:
             gl.glVertex2f(cx, ly); gl.glVertex2f(cx + cw, ly)
         gl.glEnd()
 
-        # Reference Line
         if min_val <= ref_val <= max_val:
             ry = cy + ch * (1.0 - (ref_val - min_val) / (max_val - min_val))
             gl.glColor4f(*ref_color)
@@ -389,7 +387,6 @@ class RealtimeOscilloscope:
             gl.glVertex2f(cx, ry); gl.glVertex2f(cx + cw, ry)
             gl.glEnd()
 
-        # Waveform Line
         gl.glLineWidth(1.8)
         gl.glColor4f(*color)
         gl.glBegin(gl.GL_LINE_STRIP)
@@ -401,11 +398,9 @@ class RealtimeOscilloscope:
         gl.glEnd()
 
     def _draw_dual_waveform_channel(self, gx, gy, gw, gh, data1, data2, min_val, max_val, label1, label2, color1, color2, font_renderer):
-        # Header text
         font_renderer.draw_text(label1, gx + 4, gy + 2, 'mono', 10, tuple(int(c * 255) for c in color1))
         font_renderer.draw_text(label2, gx + 110, gy + 2, 'mono', 10, tuple(int(c * 255) for c in color2))
 
-        # Canvas Box
         cx, cy, cw, ch = gx, gy + 16, gw, gh - 18
         gl.glColor4f(0.04, 0.06, 0.10, 0.90)
         gl.glBegin(gl.GL_QUADS)
@@ -421,7 +416,6 @@ class RealtimeOscilloscope:
             gl.glVertex2f(cx, ly); gl.glVertex2f(cx + cw, ly)
         gl.glEnd()
 
-        # Waveform 1
         gl.glLineWidth(1.8)
         gl.glColor4f(*color1)
         gl.glBegin(gl.GL_LINE_STRIP)
@@ -432,7 +426,6 @@ class RealtimeOscilloscope:
             gl.glVertex2f(px, py)
         gl.glEnd()
 
-        # Waveform 2
         gl.glColor4f(*color2)
         gl.glBegin(gl.GL_LINE_STRIP)
         for i, val in enumerate(data2):
@@ -449,11 +442,12 @@ class RealtimeOscilloscope:
 class BlenderMuJoCoViewer:
     """
     Apptronik Apollo Scientific Research & Telemetry Viewer:
-    - Active Biomechanics & Balance Stabilization Controller.
+    - Active Biomechanics & Attitude Stabilization Controller (Self-Righting).
     - 3D Physics Overlays (CoM, GRF Vectors, ZMP, Support Polygon, Metric Grid).
     - Multi-Channel Rolling Oscilloscope & 32-DoF Actuator Load Meters.
     - AHRS / IMU Attitude Horizon Indicator.
     - Dynamic Push Perturbation Disturbance Rejection Testing.
+    - Master Clean View (TAB) & Modular Panel Toggles (D: Diag, G: Graph, T: Top, B: Dock).
     - Dual Visual Themes (Cyber-Lab Dark <-> Academic Paper High-Key Light).
     - Ultra-Crisp TrueType Font Rendering & Anti-Aliased Blender Gizmo.
     """
@@ -507,9 +501,13 @@ class BlenderMuJoCoViewer:
         self.layer_collision = False   # F7: Collision Geometries
         self.theme_academic = False    # F8: Academic Paper Light Mode vs Dark Cyber-Lab
 
-        # UI Visibility Toggles
-        self.show_diagnostics = True   # TAB: Left Diagnostic Panel
+        # Master & Sub-Panel UI Visibility Toggles
+        self.show_hud = True           # TAB: Master HUD Toggle (All UI On/Off)
+        self.show_top_ribbon = True    # T: Top Status Ribbon
+        self.show_diagnostics = True   # D: Left Diagnostic Panel
         self.show_oscilloscope = True  # G: Right Graph Panel
+        self.show_bottom_dock = True   # B: Bottom Controls Dock
+        self.show_gizmo = True         # Gizmo visibility
 
         # Reset to standing keyframe
         self._reset_robot()
@@ -592,21 +590,32 @@ class BlenderMuJoCoViewer:
         print("[ROBOT] Reset to upright standing pose")
 
     def _step_physics_with_balance(self):
-        """Active standing controller + impulse perturbation injection."""
+        """Active standing controller + attitude PD restoration + impulse perturbation."""
         key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "stand")
         if key_id != -1 and self.model.key_ctrl.shape[1] == self.model.nu:
             self.data.ctrl[:] = self.model.key_ctrl[key_id]
 
-        # Virtual Pelvis Suspension / Height PD Controller
+        # 1. Virtual Pelvis Suspension / Height PD Controller
         kp_z = 6000.0
         kd_z = 600.0
         z_err = self.nominal_root_z - self.data.qpos[2]
         vz = self.data.qvel[2]
         fz = self.gravity_comp + kp_z * z_err - kd_z * vz
 
+        # 2. Active Attitude / Upright Restoration (Roll, Pitch, Yaw PD control)
+        # Pulls torso back to perfectly upright [1, 0, 0, 0] quaternion
+        q = self.data.qpos[3:7]
+        kp_rot = 900.0
+        kd_rot = 140.0
+        tau_rx = -kp_rot * q[1] - kd_rot * self.data.qvel[3]
+        tau_ry = -kp_rot * q[2] - kd_rot * self.data.qvel[4]
+        tau_rz = -kp_rot * q[3] - kd_rot * self.data.qvel[5]
+
         total_applied_force = np.array([self.push_force[0], self.push_force[1], fz])
+        total_applied_torque = np.array([tau_rx, tau_ry, tau_rz])
+
         self.data.xfrc_applied[self.root_body_id][:3] = total_applied_force
-        self.data.xfrc_applied[self.root_body_id][3:] = -300.0 * self.data.qvel[3:6]
+        self.data.xfrc_applied[self.root_body_id][3:] = total_applied_torque
 
         if self.push_decay > 0.0:
             self.push_decay -= self.model.opt.timestep
@@ -785,20 +794,38 @@ class BlenderMuJoCoViewer:
 
     def _on_key(self, window, key, scancode, action, mods):
         if action == glfw.PRESS:
-            # Simulation Controls
-            if key == glfw.KEY_SPACE:
+            # 1. Master HUD & Panel Visibility Toggles
+            if key == glfw.KEY_TAB:
+                # Master Clean View: Toggle ALL 2D HUD overlays at once
+                self.show_hud = not self.show_hud
+                print(f"[HUD] Master HUD Overlays: {'ON' if self.show_hud else 'OFF (Clean View)'}")
+            elif key == glfw.KEY_D:
+                # Toggle Left Diagnostics
+                self.show_diagnostics = not self.show_diagnostics
+                print(f"[PANEL] Diagnostics: {'ON' if self.show_diagnostics else 'OFF'}")
+            elif key == glfw.KEY_G:
+                # Toggle Right Graph / Oscilloscope
+                self.show_oscilloscope = not self.show_oscilloscope
+                print(f"[PANEL] Oscilloscope: {'ON' if self.show_oscilloscope else 'OFF'}")
+            elif key == glfw.KEY_T:
+                # Toggle Top Status Ribbon
+                self.show_top_ribbon = not self.show_top_ribbon
+                print(f"[PANEL] Top Ribbon: {'ON' if self.show_top_ribbon else 'OFF'}")
+            elif key == glfw.KEY_B:
+                # Toggle Bottom Dock
+                self.show_bottom_dock = not self.show_bottom_dock
+                print(f"[PANEL] Bottom Dock: {'ON' if self.show_bottom_dock else 'OFF'}")
+
+            # 2. Simulation Controls
+            elif key == glfw.KEY_SPACE:
                 self.paused = not self.paused
                 print(f"[SIMULATION] {'PAUSED' if self.paused else 'RUNNING'}")
             elif key == glfw.KEY_N:
                 self.step_single_frame = True
             elif key == glfw.KEY_R:
                 self._reset_robot()
-            elif key == glfw.KEY_TAB:
-                self.show_diagnostics = not self.show_diagnostics
-            elif key == glfw.KEY_G:
-                self.show_oscilloscope = not self.show_oscilloscope
 
-            # Speed Controls
+            # 3. Speed Controls
             elif key == glfw.KEY_1 and not mods:
                 self.sim_speed = 0.1
             elif key == glfw.KEY_2 and not mods:
@@ -808,19 +835,19 @@ class BlenderMuJoCoViewer:
             elif key == glfw.KEY_4 and not mods:
                 self.sim_speed = 1.0
 
-            # Disturbance Rejection Testing (Push Force)
+            # 4. Disturbance Rejection Testing (Push Force)
             elif key == glfw.KEY_LEFT:
-                self.inject_perturbation(fy=120.0)
+                self.inject_perturbation(fy=140.0)
             elif key == glfw.KEY_RIGHT:
-                self.inject_perturbation(fy=-120.0)
+                self.inject_perturbation(fy=-140.0)
             elif key == glfw.KEY_UP:
-                self.inject_perturbation(fx=140.0)
+                self.inject_perturbation(fx=150.0)
             elif key == glfw.KEY_DOWN:
-                self.inject_perturbation(fx=-140.0)
+                self.inject_perturbation(fx=-150.0)
             elif key == glfw.KEY_F:
-                self.inject_perturbation(fx=100.0, fy=80.0)
+                self.inject_perturbation(fx=120.0, fy=100.0)
 
-            # Layer Toggles (F1 - F8)
+            # 5. Layer Toggles (F1 - F8)
             elif key == glfw.KEY_F1:
                 self.layer_com = not self.layer_com
                 print(f"[LAYER] CoM: {self.layer_com}")
@@ -847,11 +874,11 @@ class BlenderMuJoCoViewer:
                 self.theme_academic = not self.theme_academic
                 print(f"[THEME] Academic Paper Light Mode: {self.theme_academic}")
 
-            # High-DPI Scientific Snapshot
+            # 6. High-DPI Scientific Snapshot
             elif key == glfw.KEY_P:
                 self._capture_scientific_snapshot()
 
-            # Blender Standard Numpad View Shortcuts
+            # 7. Blender Standard Numpad View Shortcuts
             elif key in (glfw.KEY_KP_1, glfw.KEY_1) and (mods & glfw.MOD_CONTROL):
                 self._animate_to_view(90.0, 0.0)
             elif key in (glfw.KEY_KP_1, glfw.KEY_1) and (mods & glfw.MOD_SHIFT):
@@ -1019,7 +1046,6 @@ class BlenderMuJoCoViewer:
         w, h = self.width, self.height
         rx, ry, rw, rh = 16, 14, w - 32, 40
 
-        # Glassmorphic Background
         gl.glColor4f(0.06, 0.09, 0.15, 0.90)
         gl.glBegin(gl.GL_QUADS)
         gl.glVertex2f(rx, ry); gl.glVertex2f(rx + rw, ry)
@@ -1033,7 +1059,6 @@ class BlenderMuJoCoViewer:
         gl.glVertex2f(rx + rw, ry + rh); gl.glVertex2f(rx, ry + rh)
         gl.glEnd()
 
-        # Status Light Dot
         dot_color = (0.95, 0.60, 0.10, 1.0) if self.paused else (0.0, 1.0, 0.50, 1.0)
         gl.glColor4f(*dot_color)
         gl.glBegin(gl.GL_TRIANGLE_FAN)
@@ -1043,7 +1068,6 @@ class BlenderMuJoCoViewer:
             gl.glVertex2f(rx + 20 + 6.0 * math.cos(theta), ry + 20 + 6.0 * math.sin(theta))
         gl.glEnd()
 
-        # Title & Telemetry Metrics
         fr = self.font_renderer
         fr.draw_text("APOLLO NEURO-LAB", rx + 36, ry + 11, 'bold', 15, (0, 240, 255, 255))
 
@@ -1059,20 +1083,15 @@ class BlenderMuJoCoViewer:
         pwr_str = f"POWER: {telem['total_power']:.1f}W | MASS: {self.total_mass:.1f}kg"
         fr.draw_text(pwr_str, rx + 680, ry + 13, 'mono', 12, (180, 240, 180, 255))
 
-        # Status Badge
         badge_text = "PAUSED" if self.paused else ("PUSH PERTURBATION" if self.push_decay > 0.0 else "ACTIVE PD SUSPENSION (STABLE)")
         badge_color = (255, 120, 0, 255) if (self.paused or self.push_decay > 0.0) else (0, 255, 140, 255)
         fr.draw_text(badge_text, rx + rw - 250, ry + 13, 'bold', 12, badge_color)
 
     def _draw_left_diagnostic_dashboard(self, telem):
         """Left Diagnostics Panel: AHRS IMU Horizon, Euler Angles, and Actuator Torque Loads."""
-        if not self.show_diagnostics:
-            return
-
         px, py, pw, ph = 16, 64, 330, self.height - 110
         fr = self.font_renderer
 
-        # Panel Background
         gl.glColor4f(0.06, 0.09, 0.14, 0.88)
         gl.glBegin(gl.GL_QUADS)
         gl.glVertex2f(px, py); gl.glVertex2f(px + pw, py)
@@ -1092,12 +1111,10 @@ class BlenderMuJoCoViewer:
         sec1_y = py + 34
         fr.draw_text("IMU ATTITUDE ESTIMATOR", px + 14, sec1_y, 'bold', 11, (140, 180, 220, 255))
         
-        # Horizon Dial Center
         hx, hy, hr = px + 65, sec1_y + 48, 36
         roll = telem['roll']
         pitch = telem['pitch']
 
-        # Horizon Circle & Sky/Ground
         gl.glColor4f(0.08, 0.14, 0.24, 0.95)
         gl.glBegin(gl.GL_TRIANGLE_FAN)
         gl.glVertex2f(hx, hy)
@@ -1106,7 +1123,6 @@ class BlenderMuJoCoViewer:
             gl.glVertex2f(hx + hr * math.cos(th), hy + hr * math.sin(th))
         gl.glEnd()
 
-        # Artificial Horizon Pitch Line
         pitch_offset = np.clip(pitch * 1.2, -hr * 0.8, hr * 0.8)
         rad_roll = math.radians(roll)
         cos_r = math.cos(rad_roll)
@@ -1119,7 +1135,6 @@ class BlenderMuJoCoViewer:
         gl.glVertex2f(hx + hr * 0.75 * cos_r + pitch_offset * sin_r, hy + hr * 0.75 * sin_r - pitch_offset * cos_r)
         gl.glEnd()
 
-        # Horizon Ring Outline
         gl.glLineWidth(1.5)
         gl.glColor4f(0.30, 0.50, 0.75, 0.85)
         gl.glBegin(gl.GL_LINE_LOOP)
@@ -1128,7 +1143,6 @@ class BlenderMuJoCoViewer:
             gl.glVertex2f(hx + hr * math.cos(th), hy + hr * math.sin(th))
         gl.glEnd()
 
-        # Numerical Attitude Values
         fr.draw_text(f"ROLL : {roll:+05.1f}°", px + 125, sec1_y + 24, 'mono', 11, (200, 230, 255, 255))
         fr.draw_text(f"PITCH: {pitch:+05.1f}°", px + 125, sec1_y + 42, 'mono', 11, (200, 230, 255, 255))
         fr.draw_text(f"YAW  : {telem['yaw']:+05.1f}°", px + 125, sec1_y + 60, 'mono', 11, (200, 230, 255, 255))
@@ -1158,7 +1172,6 @@ class BlenderMuJoCoViewer:
             if item['name'] in display_joints:
                 fr.draw_text(item['name'], px + 14, curr_y, 'mono', 10, (210, 230, 250, 255))
                 
-                # Progress Bar
                 bx, by, bw, bh = px + 125, curr_y + 2, 120, 10
                 gl.glColor4f(0.12, 0.18, 0.28, 0.90)
                 gl.glBegin(gl.GL_QUADS)
@@ -1166,7 +1179,6 @@ class BlenderMuJoCoViewer:
                 gl.glVertex2f(bx + bw, by + bh); gl.glVertex2f(bx, by + bh)
                 gl.glEnd()
 
-                # Ratio Fill (color-coded by load)
                 fill_w = bw * item['ratio']
                 if item['ratio'] < 0.35:
                     bar_col = (0.0, 0.94, 1.0, 0.95)
@@ -1183,7 +1195,6 @@ class BlenderMuJoCoViewer:
                 gl.glVertex2f(bx + fill_w, by + bh); gl.glVertex2f(bx, by + bh)
                 gl.glEnd()
 
-                # Numerical Torque
                 fr.draw_text(f"{abs(item['tau']):.1f}Nm", px + 252, curr_y, 'mono', 10, (180, 210, 240, 255))
                 curr_y += 18
 
@@ -1193,7 +1204,6 @@ class BlenderMuJoCoViewer:
         dx, dy, dw, dh = 16, h - 42, w - 32, 32
         fr = self.font_renderer
 
-        # Dock Background
         gl.glColor4f(0.06, 0.09, 0.15, 0.90)
         gl.glBegin(gl.GL_QUADS)
         gl.glVertex2f(dx, dy); gl.glVertex2f(dx + dw, dy)
@@ -1207,22 +1217,18 @@ class BlenderMuJoCoViewer:
         gl.glVertex2f(dx + dw, dy + dh); gl.glVertex2f(dx, dy + dh)
         gl.glEnd()
 
-        # Shortcut badges
         shortcuts = [
             ("SPACE", "Play/Pause"),
             ("N", "Step 1"),
-            ("1-4", f"Speed: {self.sim_speed}x"),
-            ("ARROWS", "Push Test"),
-            ("F1", f"CoM:{'ON' if self.layer_com else 'OFF'}"),
-            ("F2", f"GRF:{'ON' if self.layer_grf else 'OFF'}"),
-            ("F3", f"ZMP:{'ON' if self.layer_zmp else 'OFF'}"),
-            ("F5", f"Trail:{'ON' if self.layer_trajectory else 'OFF'}"),
-            ("F6", f"Grid:{'ON' if self.layer_metric_grid else 'OFF'}"),
+            ("1-4", f"Speed:{self.sim_speed}x"),
+            ("ARROWS/F", "Push Test"),
+            ("TAB", "Clean View (All HUD)"),
+            ("D", f"Diag:{'ON' if self.show_diagnostics else 'OFF'}"),
+            ("G", f"Graph:{'ON' if self.show_oscilloscope else 'OFF'}"),
+            ("F1-F6", "Physics 3D Overlays"),
             ("F8", f"Theme:{'LIGHT' if self.theme_academic else 'DARK'}"),
-            ("TAB", "Diag"),
-            ("G", "Graph"),
             ("P", "Snapshot"),
-            ("R", "Reset")
+            ("R", "Reset Pose")
         ]
 
         bx = dx + 12
@@ -1281,9 +1287,10 @@ class BlenderMuJoCoViewer:
     def run(self):
         print("==================================================================")
         print(" [APPTRONIK APOLLO] Scientific Research & Telemetry Suite         ")
-        print(" - Active Standing Stability Controller: Enabled (100% Upright)  ")
+        print(" - Active Standing Stability Controller: Enabled (Self-Righting)  ")
         print(" - Physics Telemetry: CoM 3D, GRF Vectors, ZMP, Support Polygon   ")
-        print(" - Real-Time Multi-Channel Oscilloscope & 32-DoF Load Diagnostics ")
+        print(" - Master Clean View: TAB (Toggle ALL HUD On/Off)                ")
+        print(" - Modular Panels: D (Diagnostics) | G (Graph) | T (Top) | B (Dock)")
         print(" - Dynamic Force Perturbation: Arrow Keys / F (Push Disturbance) ")
         print(" - Overlays: F1(CoM) F2(GRF) F3(ZMP) F4(Skel) F5(Trail) F6(Grid) ")
         print(" - Snapshot: P (Save Scientific Figure) | F8 (Dark/Light Theme)   ")
@@ -1343,48 +1350,54 @@ class BlenderMuJoCoViewer:
             mujoco.mjr_render(viewport, self.scn, self.con)
 
             # 2. 2D Orthographic Scientific HUD Overlay Pass
-            gl.glUseProgram(0)
-            gl.glBindVertexArray(0)
-            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
-            gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, 0)
-            gl.glDisable(gl.GL_LIGHTING)
-            gl.glDisable(gl.GL_CULL_FACE)
-            gl.glDisable(gl.GL_DEPTH_TEST)
-            gl.glDepthMask(gl.GL_FALSE)
-            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+            if self.show_hud:
+                gl.glUseProgram(0)
+                gl.glBindVertexArray(0)
+                gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+                gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, 0)
+                gl.glDisable(gl.GL_LIGHTING)
+                gl.glDisable(gl.GL_CULL_FACE)
+                gl.glDisable(gl.GL_DEPTH_TEST)
+                gl.glDepthMask(gl.GL_FALSE)
+                gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
 
-            gl.glMatrixMode(gl.GL_PROJECTION)
-            gl.glPushMatrix()
-            gl.glLoadIdentity()
-            gl.glOrtho(0, self.width, self.height, 0, -1, 1)
+                gl.glMatrixMode(gl.GL_PROJECTION)
+                gl.glPushMatrix()
+                gl.glLoadIdentity()
+                gl.glOrtho(0, self.width, self.height, 0, -1, 1)
 
-            gl.glMatrixMode(gl.GL_MODELVIEW)
-            gl.glPushMatrix()
-            gl.glLoadIdentity()
+                gl.glMatrixMode(gl.GL_MODELVIEW)
+                gl.glPushMatrix()
+                gl.glLoadIdentity()
 
-            gl.glEnable(gl.GL_BLEND)
-            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+                gl.glEnable(gl.GL_BLEND)
+                gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
-            # Render HUD Panels
-            self._draw_top_scientific_ribbon(telem)
-            self._draw_left_diagnostic_dashboard(telem)
-            
-            if self.show_oscilloscope:
-                osc_w = min(420, self.width - 370)
-                # Positioned neatly below Gizmo & Top Ribbon
-                self.oscilloscope.draw(self.width - osc_w - 16, 125, osc_w, 240, self.font_renderer)
+                # Render Modular HUD Panels
+                if self.show_top_ribbon:
+                    self._draw_top_scientific_ribbon(telem)
 
-            self._draw_bottom_controls_dock()
-            self._draw_gizmo_overlay()
+                if self.show_diagnostics:
+                    self._draw_left_diagnostic_dashboard(telem)
+                
+                if self.show_oscilloscope:
+                    osc_w = min(420, self.width - 370)
+                    self.oscilloscope.draw(self.width - osc_w - 16, 125, osc_w, 240, self.font_renderer)
 
-            gl.glDisable(gl.GL_BLEND)
-            gl.glEnable(gl.GL_DEPTH_TEST)
-            gl.glDepthMask(gl.GL_TRUE)
+                if self.show_bottom_dock:
+                    self._draw_bottom_controls_dock()
 
-            gl.glPopMatrix()
-            gl.glMatrixMode(gl.GL_PROJECTION)
-            gl.glPopMatrix()
-            gl.glMatrixMode(gl.GL_MODELVIEW)
+                if self.show_gizmo:
+                    self._draw_gizmo_overlay()
+
+                gl.glDisable(gl.GL_BLEND)
+                gl.glEnable(gl.GL_DEPTH_TEST)
+                gl.glDepthMask(gl.GL_TRUE)
+
+                gl.glPopMatrix()
+                gl.glMatrixMode(gl.GL_PROJECTION)
+                gl.glPopMatrix()
+                gl.glMatrixMode(gl.GL_MODELVIEW)
 
             # 3. Swap Buffers
             glfw.swap_buffers(self.window)

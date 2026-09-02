@@ -64,15 +64,19 @@ def capture_viewer_frame(output_path=None):
     gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
     # Render HUD Panels
-    viewer._draw_top_scientific_ribbon(telem)
-    viewer._draw_left_diagnostic_dashboard(telem)
-    
-    if viewer.show_oscilloscope:
-        osc_w = min(420, viewer.width - 370)
-        viewer.oscilloscope.draw(viewer.width - osc_w - 16, 125, osc_w, 240, viewer.font_renderer)
+    if viewer.show_hud:
+        if viewer.show_top_ribbon:
+            viewer._draw_top_scientific_ribbon(telem)
+        if viewer.show_diagnostics:
+            viewer._draw_left_diagnostic_dashboard(telem)
+        if viewer.show_oscilloscope:
+            osc_w = min(420, viewer.width - 370)
+            viewer.oscilloscope.draw(viewer.width - osc_w - 16, 125, osc_w, 240, viewer.font_renderer)
+        if viewer.show_bottom_dock:
+            viewer._draw_bottom_controls_dock()
+        if viewer.show_gizmo:
+            viewer._draw_gizmo_overlay()
 
-    viewer._draw_bottom_controls_dock()
-    viewer._draw_gizmo_overlay()
 
     gl.glDisable(gl.GL_BLEND)
     gl.glEnable(gl.GL_DEPTH_TEST)
