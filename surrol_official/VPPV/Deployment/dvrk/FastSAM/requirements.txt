@@ -1,19 +1,19 @@
 # Base-----------------------------------
-matplotlib>=3.2.2
-opencv-python>=4.6.0
-Pillow>=10.0.0
-PyYAML>=6.0.1
-requests>=2.28.0
-scipy>=1.4.1
-torch>=2.0.0
-torchvision>=0.15.0
-tqdm>=4.64.0
+matplotlib>=3.11.1
+opencv-python>=5.0.0.93
+Pillow>=12.3.0
+PyYAML>=6.0.3
+requests>=2.34.2
+scipy>=1.18.1
+torch>=2.13.0
+torchvision>=0.28.0
+tqdm>=4.70.0
 
-pandas>=1.1.4
-seaborn>=0.11.0
+pandas>=3.0.5
+seaborn>=0.13.2
 
-gradio>=4.44.1
+gradio>=6.26.0
 
 # Ultralytics-----------------------------------
-ultralytics>=8.0.120
+ultralytics>=8.4.135
 
