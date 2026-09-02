@@ -1328,31 +1328,31 @@ class BlenderMuJoCoViewer:
 
             mujoco.mjr_render(viewport, self.scn, self.con)
 
-            # 2. 2D Orthographic Scientific HUD Overlay Pass
+            # 2. 2D Orthographic Overlay Pass (Always Active for Gizmo)
+            gl.glUseProgram(0)
+            gl.glBindVertexArray(0)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+            gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, 0)
+            gl.glDisable(gl.GL_LIGHTING)
+            gl.glDisable(gl.GL_CULL_FACE)
+            gl.glDisable(gl.GL_DEPTH_TEST)
+            gl.glDepthMask(gl.GL_FALSE)
+            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+
+            gl.glMatrixMode(gl.GL_PROJECTION)
+            gl.glPushMatrix()
+            gl.glLoadIdentity()
+            gl.glOrtho(0, self.width, self.height, 0, -1, 1)
+
+            gl.glMatrixMode(gl.GL_MODELVIEW)
+            gl.glPushMatrix()
+            gl.glLoadIdentity()
+
+            gl.glEnable(gl.GL_BLEND)
+            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+
+            # Render Telemetry HUD Panels (Toggled by TAB)
             if self.show_hud:
-                gl.glUseProgram(0)
-                gl.glBindVertexArray(0)
-                gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
-                gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, 0)
-                gl.glDisable(gl.GL_LIGHTING)
-                gl.glDisable(gl.GL_CULL_FACE)
-                gl.glDisable(gl.GL_DEPTH_TEST)
-                gl.glDepthMask(gl.GL_FALSE)
-                gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-
-                gl.glMatrixMode(gl.GL_PROJECTION)
-                gl.glPushMatrix()
-                gl.glLoadIdentity()
-                gl.glOrtho(0, self.width, self.height, 0, -1, 1)
-
-                gl.glMatrixMode(gl.GL_MODELVIEW)
-                gl.glPushMatrix()
-                gl.glLoadIdentity()
-
-                gl.glEnable(gl.GL_BLEND)
-                gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-
-                # Render All HUD Panels (Unified)
                 self._draw_top_scientific_ribbon(telem)
                 self._draw_left_diagnostic_dashboard(telem)
                 
@@ -1360,17 +1360,19 @@ class BlenderMuJoCoViewer:
                 self.oscilloscope.draw(self.width - osc_w - 16, 125, osc_w, 240, self.font_renderer)
 
                 self._draw_bottom_controls_dock()
-                self._draw_gizmo_overlay()
 
+            # Always Render Blender 3D Orientation Gizmo (Never Hidden)
+            self._draw_gizmo_overlay()
 
-                gl.glDisable(gl.GL_BLEND)
-                gl.glEnable(gl.GL_DEPTH_TEST)
-                gl.glDepthMask(gl.GL_TRUE)
+            gl.glDisable(gl.GL_BLEND)
+            gl.glEnable(gl.GL_DEPTH_TEST)
+            gl.glDepthMask(gl.GL_TRUE)
 
-                gl.glPopMatrix()
-                gl.glMatrixMode(gl.GL_PROJECTION)
-                gl.glPopMatrix()
-                gl.glMatrixMode(gl.GL_MODELVIEW)
+            gl.glPopMatrix()
+            gl.glMatrixMode(gl.GL_PROJECTION)
+            gl.glPopMatrix()
+            gl.glMatrixMode(gl.GL_MODELVIEW)
+
 
             # 3. Swap Buffers
             glfw.swap_buffers(self.window)

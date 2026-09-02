@@ -63,7 +63,7 @@ def capture_viewer_frame(output_path=None):
     gl.glEnable(gl.GL_BLEND)
     gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
-    # Render All HUD Panels (Unified)
+    # Render Telemetry HUD Panels (Toggled by TAB)
     if viewer.show_hud:
         viewer._draw_top_scientific_ribbon(telem)
         viewer._draw_left_diagnostic_dashboard(telem)
@@ -72,7 +72,10 @@ def capture_viewer_frame(output_path=None):
         viewer.oscilloscope.draw(viewer.width - osc_w - 16, 125, osc_w, 240, viewer.font_renderer)
 
         viewer._draw_bottom_controls_dock()
-        viewer._draw_gizmo_overlay()
+
+    # Always Render Blender 3D Orientation Gizmo (Never Hidden)
+    viewer._draw_gizmo_overlay()
+
 
 
 
