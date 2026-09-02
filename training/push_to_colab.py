@@ -48,7 +48,7 @@ def prepare_colab_package():
     else:
         print(f"[ERROR] Thiếu file mô hình: {scene_path}")
 
-    # 3. Tự động Commit & Push lên GitHub để Colab cập nhật tức thì
+    # 3. Tự động Commit & Push lên GitHub
     print("[3/3] Đang đồng bộ lên GitHub repo...")
     try:
         subprocess.run(["git", "add", "colab_apollo_training.ipynb", "colab_deploy/"], cwd=root_dir, check=True)
@@ -66,7 +66,13 @@ def prepare_colab_package():
     print("\n" + "=" * 64)
     print("  [SẴN SÀNG HUẤN LUYỆN GOOGLE COLAB GPU]")
     print(f"  Link 1-Click: {colab_url}")
+    print("  Lệnh CLI chạy ngầm: colab run --gpu T4 training/colab_train.py")
     print("=" * 64)
 
 if __name__ == "__main__":
-    prepare_colab_package()
+    if len(sys.argv) > 1 and sys.argv[1] in ("--run", "-r", "--cli"):
+        print("[COLAB CLI] Khởi động phiên huấn luyện GPU T4 chạy ngầm từ xa...")
+        os.system("colab run --gpu T4 training/colab_train.py")
+    else:
+        prepare_colab_package()
+
