@@ -501,13 +501,9 @@ class BlenderMuJoCoViewer:
         self.layer_collision = False   # F7: Collision Geometries
         self.theme_academic = False    # F8: Academic Paper Light Mode vs Dark Cyber-Lab
 
-        # Master & Sub-Panel UI Visibility Toggles
-        self.show_hud = True           # TAB: Master HUD Toggle (All UI On/Off)
-        self.show_top_ribbon = True    # T: Top Status Ribbon
-        self.show_diagnostics = True   # D: Left Diagnostic Panel
-        self.show_oscilloscope = True  # G: Right Graph Panel
-        self.show_bottom_dock = True   # B: Bottom Controls Dock
-        self.show_gizmo = True         # Gizmo visibility
+        # UI Visibility Toggle (Unified)
+        self.show_hud = True           # TAB: Toggle All 2D UI Overlays On/Off
+
 
         # Reset to standing keyframe
         self._reset_robot()
@@ -794,27 +790,10 @@ class BlenderMuJoCoViewer:
 
     def _on_key(self, window, key, scancode, action, mods):
         if action == glfw.PRESS:
-            # 1. Master HUD & Panel Visibility Toggles
+            # 1. Master HUD Visibility Toggle (Single Unified Key)
             if key == glfw.KEY_TAB:
-                # Master Clean View: Toggle ALL 2D HUD overlays at once
                 self.show_hud = not self.show_hud
-                print(f"[HUD] Master HUD Overlays: {'ON' if self.show_hud else 'OFF (Clean View)'}")
-            elif key == glfw.KEY_D:
-                # Toggle Left Diagnostics
-                self.show_diagnostics = not self.show_diagnostics
-                print(f"[PANEL] Diagnostics: {'ON' if self.show_diagnostics else 'OFF'}")
-            elif key == glfw.KEY_G:
-                # Toggle Right Graph / Oscilloscope
-                self.show_oscilloscope = not self.show_oscilloscope
-                print(f"[PANEL] Oscilloscope: {'ON' if self.show_oscilloscope else 'OFF'}")
-            elif key == glfw.KEY_T:
-                # Toggle Top Status Ribbon
-                self.show_top_ribbon = not self.show_top_ribbon
-                print(f"[PANEL] Top Ribbon: {'ON' if self.show_top_ribbon else 'OFF'}")
-            elif key == glfw.KEY_B:
-                # Toggle Bottom Dock
-                self.show_bottom_dock = not self.show_bottom_dock
-                print(f"[PANEL] Bottom Dock: {'ON' if self.show_bottom_dock else 'OFF'}")
+                print(f"[HUD] All UI Panels: {'SHOWN' if self.show_hud else 'HIDDEN (Clean 3D View)'}")
 
             # 2. Simulation Controls
             elif key == glfw.KEY_SPACE:
@@ -824,6 +803,7 @@ class BlenderMuJoCoViewer:
                 self.step_single_frame = True
             elif key == glfw.KEY_R:
                 self._reset_robot()
+
 
             # 3. Speed Controls
             elif key == glfw.KEY_1 and not mods:
@@ -1222,14 +1202,13 @@ class BlenderMuJoCoViewer:
             ("N", "Step 1"),
             ("1-4", f"Speed:{self.sim_speed}x"),
             ("ARROWS/F", "Push Test"),
-            ("TAB", "Clean View (All HUD)"),
-            ("D", f"Diag:{'ON' if self.show_diagnostics else 'OFF'}"),
-            ("G", f"Graph:{'ON' if self.show_oscilloscope else 'OFF'}"),
-            ("F1-F6", "Physics 3D Overlays"),
+            ("TAB", f"All UI:{'ON' if self.show_hud else 'OFF'}"),
+            ("F1-F6", "3D Overlays"),
             ("F8", f"Theme:{'LIGHT' if self.theme_academic else 'DARK'}"),
             ("P", "Snapshot"),
             ("R", "Reset Pose")
         ]
+
 
         bx = dx + 12
         for key, desc in shortcuts:
@@ -1373,22 +1352,16 @@ class BlenderMuJoCoViewer:
                 gl.glEnable(gl.GL_BLEND)
                 gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
-                # Render Modular HUD Panels
-                if self.show_top_ribbon:
-                    self._draw_top_scientific_ribbon(telem)
-
-                if self.show_diagnostics:
-                    self._draw_left_diagnostic_dashboard(telem)
+                # Render All HUD Panels (Unified)
+                self._draw_top_scientific_ribbon(telem)
+                self._draw_left_diagnostic_dashboard(telem)
                 
-                if self.show_oscilloscope:
-                    osc_w = min(420, self.width - 370)
-                    self.oscilloscope.draw(self.width - osc_w - 16, 125, osc_w, 240, self.font_renderer)
+                osc_w = min(420, self.width - 370)
+                self.oscilloscope.draw(self.width - osc_w - 16, 125, osc_w, 240, self.font_renderer)
 
-                if self.show_bottom_dock:
-                    self._draw_bottom_controls_dock()
+                self._draw_bottom_controls_dock()
+                self._draw_gizmo_overlay()
 
-                if self.show_gizmo:
-                    self._draw_gizmo_overlay()
 
                 gl.glDisable(gl.GL_BLEND)
                 gl.glEnable(gl.GL_DEPTH_TEST)
