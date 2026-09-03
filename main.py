@@ -131,7 +131,142 @@ class PPOPolicy:
 
 
 # ==============================================================================
-# 1. BỘ KẾT XUẤT FONT TIẾNG VIỆT UNICODE ĐỘ PHÂN GIẢI CAO (OPENGL TEXTURE CACHE)
+# 1. SMOOTH GET-UP CONTROLLER — ĐỨNG DẬY VẬT LÝ MỀM (KHÔNG CÓ TELEPORT)
+# ==============================================================================
+class SmoothGetUpController:
+    """
+    Bộ điều khiển đứng dậy mượt mà (Physics-Compliant Soft Recovery).
+    Dựa trên nghiên cứu DeepMind Agile Soccer (2024) và HumanUP (2025).
+
+    Giải quyết 3 vấn đề cốt lõi của PD cứng:
+      1. Xung lực bước (Step Impulse): kp*(z_nom - z_floor) tạo >5000N → 12g gia tốc
+         → Clamp Fz <= 1.25 * m*g
+      2. Small-angle breakdown: kp_rot * q[xyz] tạo >636Nm khi robot ngã 90°
+         → Dùng mju_subQuat (geodesic tangent-space error) + clamp torque <= 50Nm
+      3. Không có trajectory reference: PD nhảy step với z_nominal cố định
+         → Quintic S-curve (minimum-jerk) tạo quỹ đạo tham chiếu biến thiên mượt mà
+
+    Args:
+        duration: Thời gian đứng dậy (giây). Mặc định 2.5s.
+    """
+
+    def __init__(self, model, data, root_body_id, nominal_root_z, total_mass, duration=2.5):
+        self.model        = model
+        self.data         = data
+        self.root_body_id = root_body_id
+        self.nominal_z    = nominal_root_z
+        self.gravity_comp = total_mass * 9.81
+        self.duration     = duration
+
+        # Trạng thái animation
+        self.is_recovering   = False
+        self.recover_time    = 0.0
+        self.z_start         = 0.0
+        self.quat_start      = np.array([1.0, 0.0, 0.0, 0.0])
+        self.ctrl_start      = np.zeros(model.nu)
+
+        # Tư thế đích (Keyframe 'stand')
+        self.quat_target = np.array([1.0, 0.0, 0.0, 0.0])
+        self.ctrl_target = np.zeros(model.nu)
+        key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "stand")
+        if key_id != -1 and model.key_ctrl.shape[1] == model.nu:
+            self.ctrl_target = model.key_ctrl[key_id].copy()
+
+        # Giới hạn bão hòa lực vật lý (Force & Torque Clamping)
+        # Fz_max = 1.25 * m*g → gia tốc tịnh tiến lên tối đa 0.25g ~ 2.45 m/s²
+        self.fz_max  = 1.25 * self.gravity_comp
+        self.tau_max = 50.0  # Nm — loại bỏ hoàn toàn vặn xoắn thân bạo lực
+
+        # Buffer tĩnh tránh cấp phát RAM trong vòng lặp vật lý
+        self._quat_des = np.zeros(4)
+        self._rot_err  = np.zeros(3)
+
+    @staticmethod
+    def _slerp(qa, qb, t):
+        """
+        Spherical Linear Interpolation (SLERP) thuần numpy.
+        Không dùng mujoco.mju_slerp vì một số bản cài đặt Python binding
+        không export hàm này. Đảm bảo nội suy ngắn nhất (dot < 0 → đảo chiều).
+        """
+        dot = np.clip(np.dot(qa, qb), -1.0, 1.0)
+        qb_adj = qb if dot >= 0.0 else -qb  # Chọn cung ngắn nhất
+        dot = abs(dot)
+        if dot > 0.9995:
+            # Hai quaternion gần nhau — dùng LERP và normalize để tránh chia 0
+            return (qa + t * (qb_adj - qa)) / np.linalg.norm(qa + t * (qb_adj - qa))
+        theta_0 = np.arccos(dot)
+        theta = theta_0 * t
+        sin_t0 = np.sin(theta_0)
+        return (np.sin(theta_0 - theta) / sin_t0) * qa + (np.sin(theta) / sin_t0) * qb_adj
+
+    def start_recovery(self):
+        """Kích hoạt khi người dùng bật lại nguồn từ RAGDOLL."""
+        self.is_recovering  = True
+        self.recover_time   = 0.0
+        self.z_start        = float(self.data.qpos[2])
+
+        q = self.data.qpos[3:7].copy()
+        norm = np.linalg.norm(q)
+        self.quat_start = q / norm if norm > 1e-6 else np.array([1.0, 0.0, 0.0, 0.0])
+
+        self.ctrl_start = self.data.ctrl.copy()
+        print(f"[GET-UP] Bat dau dung day (thoi gian: {self.duration:.1f}s, z_bat_dau={self.z_start:.3f}m)")
+
+    def step(self, push_force=None):
+        """
+        Cập nhật tại mỗi timestep.
+        Tính ctrl (joint targets) và xfrc_applied cho root body.
+        Phải gọi TRƯỚC mujoco.mj_step().
+        """
+        if push_force is None:
+            push_force = np.zeros(3)
+
+        if self.is_recovering:
+            self.recover_time += self.model.opt.timestep
+            tau = np.clip(self.recover_time / self.duration, 0.0, 1.0)
+
+            # Quintic S-curve (Minimum-Jerk): v=0, a=0 tại cả 2 đầu
+            # s(t) = 10t³ - 15t⁴ + 6t⁵  →  s'(t)/T = (30t² - 60t³ + 30t⁴) / T
+            s      = 10.0*(tau**3) - 15.0*(tau**4) + 6.0*(tau**5)
+            s_dot  = (30.0*(tau**2) - 60.0*(tau**3) + 30.0*(tau**4)) / self.duration
+
+            # Quỹ đạo tham chiếu z và vz
+            z_des  = self.z_start + s * (self.nominal_z - self.z_start)
+            vz_des = s_dot * (self.nominal_z - self.z_start)
+
+            # SLERP quaternion định hướng (thuần numpy, tránh gimbal lock)
+            self._quat_des[:] = self._slerp(self.quat_start, self.quat_target, s)
+
+            # Nội suy joint ctrl targets (mượt mà, tránh giật tay chân)
+            self.data.ctrl[:] = (1.0 - s) * self.ctrl_start + s * self.ctrl_target
+
+            if tau >= 1.0:
+                self.is_recovering = False
+                print("[GET-UP] Hoan tat! Robot da dung thang chuan.")
+        else:
+            z_des  = self.nominal_z
+            vz_des = 0.0
+            self._quat_des[:] = self.quat_target
+            self.data.ctrl[:] = self.ctrl_target
+
+        # ── TÍNH LỰC & BÃO HÒA (FORCE CLAMPING) ──────────────────────────────
+        # PD độ cao: track z_des (biến thiên) thay vì z_nominal cố định → sai số ~0
+        kp_z, kd_z = 4000.0, 450.0
+        raw_fz = self.gravity_comp + kp_z * (z_des - self.data.qpos[2]) + kd_z * (vz_des - self.data.qvel[2])
+        fz     = np.clip(raw_fz, 0.0, self.fz_max)
+
+        # PD định hướng: geodesic error trên tangent space (không dùng xấp xỉ góc nhỏ)
+        kp_rot, kd_rot = 700.0, 110.0
+        mujoco.mju_subQuat(self._rot_err, self._quat_des, self.data.qpos[3:7])
+        tau_raw = kp_rot * self._rot_err - kd_rot * self.data.qvel[3:6]
+        tau_r   = np.clip(tau_raw, -self.tau_max, self.tau_max)
+
+        self.data.xfrc_applied[self.root_body_id][:3] = [push_force[0], push_force[1], fz]
+        self.data.xfrc_applied[self.root_body_id][3:]  = tau_r
+
+
+# ==============================================================================
+# 2. BỘ KẾT XUẤT FONT TIẾNG VIỆT UNICODE ĐỘ PHÂN GIẢI CAO (OPENGL TEXTURE CACHE)
 # ==============================================================================
 class FontRenderer:
     """
@@ -603,6 +738,15 @@ class BlenderMuJoCoViewer:
             print(f"[PPO] Không tìm thấy checkpoint tại: {ck_pattern}")
             print("[PPO] Chạy: python training/download_checkpoints.py")
 
+        # --- Khởi tạo Bộ Đứng Dậy Mượt Mà (Physics-Safe Soft Recovery) ---
+        self.recovery_ctrl = SmoothGetUpController(
+            model         = self.model,
+            data          = self.data,
+            root_body_id  = self.root_body_id,
+            nominal_root_z= self.nominal_root_z,
+            total_mass    = self.total_mass,
+            duration      = 2.5
+        )
         # Trạng thái mô phỏng
         self.paused = False
         self.sim_speed = 1.0
@@ -711,58 +855,37 @@ class BlenderMuJoCoViewer:
     def _step_physics_with_balance(self):
         """
         Bước cập nhật động lực học vật lý đa chế độ:
-          - 'PPO'    : Não AI học tăng cường (100M steps) tự điều khiển góc khớp
-          - 'PD'     : Bộ cân bằng chủ động PD treo thẳng đứng (chống ngã)
-          - 'RAGDOLL': Sập nguồn điện (Motor Off / Zero Torque / Rơi tự do đè lên sàn)
+          - 'RAGDOLL': Motor Off / Zero Torque / Rơi tự do đè lên sàn vật lý
+          - 'PPO'    : Não AI PPO (100M steps) tự điều khiển góc khớp
+          - 'PD'     : SmoothGetUpController — đứng dậy mượt mà (Quintic S-curve +
+                       Force Clamping + Geodesic Quaternion Error). Không còn teleport.
         """
+        push = self.push_force.copy() if self.push_decay > 0.0 else np.zeros(3)
+        if self.push_decay > 0.0:
+            self.push_decay -= self.model.opt.timestep
+            if self.push_decay <= 0.0:
+                self.push_force = np.zeros(3)
+
         if self.control_mode == 'RAGDOLL':
-            # Ngắt toàn bộ lực nâng nhân tạo và mô-men xoắn
+            # Ngắt toàn bộ motor và ngoại lực nhân tạo
             self.data.ctrl[:] = 0.0
             self.data.xfrc_applied[self.root_body_id][:] = 0.0
-            if self.push_decay > 0.0:
-                self.data.xfrc_applied[self.root_body_id][:3] = self.push_force
-                self.push_decay -= self.model.opt.timestep
-                if self.push_decay <= 0.0:
-                    self.push_force = np.zeros(3)
+            # Vẫn có thể áp lực đẩy thử nghiệm trong lúc đang RAGDOLL
+            if np.any(push != 0.0):
+                self.data.xfrc_applied[self.root_body_id][:3] = push
 
         elif self.control_mode == 'PPO' and self.policy is not None:
-            # ── PPO Brain AI mode ───────────────────────────────────────────
+            # ── PPO Brain AI mode ────────────────────────────────────────────
             ctrl = self.policy.step(self.data, self.model)
             self.data.ctrl[:] = ctrl
             self.data.xfrc_applied[self.root_body_id][:] = 0.0
+            if np.any(push != 0.0):
+                self.data.xfrc_applied[self.root_body_id][:3] = push
 
-            # Áp dụng lực đẩy thử nghiệm nếu có
-            if self.push_decay > 0.0:
-                self.data.xfrc_applied[self.root_body_id][:3] = self.push_force
-                self.push_decay -= self.model.opt.timestep
-                if self.push_decay <= 0.0:
-                    self.push_force = np.zeros(3)
-                    self.data.xfrc_applied[self.root_body_id][:] = 0.0
         else:
-            # ── PD Cứng dự phòng (Active Attitude Self-Righting) ───────────
-            key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "stand")
-            if key_id != -1 and self.model.key_ctrl.shape[1] == self.model.nu:
-                self.data.ctrl[:] = self.model.key_ctrl[key_id]
-
-            kp_z = 6000.0
-            kd_z = 600.0
-            z_err = self.nominal_root_z - self.data.qpos[2]
-            vz = self.data.qvel[2]
-            fz = self.gravity_comp + kp_z * z_err - kd_z * vz
-
-            q = self.data.qpos[3:7]
-            kp_rot, kd_rot = 900.0, 140.0
-            tau_rx = -kp_rot * q[1] - kd_rot * self.data.qvel[3]
-            tau_ry = -kp_rot * q[2] - kd_rot * self.data.qvel[4]
-            tau_rz = -kp_rot * q[3] - kd_rot * self.data.qvel[5]
-
-            self.data.xfrc_applied[self.root_body_id][:3] = [self.push_force[0], self.push_force[1], fz]
-            self.data.xfrc_applied[self.root_body_id][3:]  = [tau_rx, tau_ry, tau_rz]
-
-            if self.push_decay > 0.0:
-                self.push_decay -= self.model.opt.timestep
-                if self.push_decay <= 0.0:
-                    self.push_force = np.zeros(3)
+            # ── PD Mode: SmoothGetUpController ───────────────────────────────
+            # Đứng dậy mượt mà vật lý không teleport (Fz <= 1.25*mg, tau <= 50Nm)
+            self.recovery_ctrl.step(push_force=push)
 
         mujoco.mj_step(self.model, self.data)
 
@@ -952,28 +1075,42 @@ class BlenderMuJoCoViewer:
                 self._reset_robot()
                 if self.policy is not None:
                     self.policy.reset()
+                # Hủy animation đứng dậy nếu đang chạy
+                self.recovery_ctrl.is_recovering = False
+                self.recovery_ctrl.recover_time  = 0.0
                 self.control_mode = "PPO" if (self.policy is not None) else "PD"
-                print(f"[ĐẶT LẠI] Robot đã về tư thế đứng thẳng chuẩn. Chế độ: {self.control_mode}")
+                print(f"[DAT LAI] Robot da ve tu the dung thang chuan. Che do: {self.control_mode}")
 
-            # Phím B: Chuyển đổi giữa Não AI PPO ↔ Bộ cân bằng PD cứng
+            # Phím B: Chuyển đổi giữa Não AI PPO ↔ Bộ cân bằng PD mượt mà
             elif key == glfw.KEY_B:
                 if self.policy is not None:
                     self.control_mode = "PD" if self.control_mode == "PPO" else "PPO"
-                    mode_str = "🧠 PPO BRAIN AI (v15, 100M steps)" if self.control_mode == "PPO" else "⚙️  PD CÂN BẰNG CHỦ ĐỘNG"
-                    print(f"[CHẾ ĐỘ ĐIỀU KHIỂN] {mode_str}")
+                    mode_str = "NAO AI PPO (v15, 100M steps)" if self.control_mode == "PPO" else "PD CAN BANG MEM (Smooth Recovery)"
+                    print(f"[CHE DO DIEU KHIEN] {mode_str}")
+                    # Nếu chuyển sang PD và robot đang không đứng thẳng → kích hoạt get-up
+                    if self.control_mode == "PD":
+                        tilt = abs(self.data.qpos[4]) + abs(self.data.qpos[5])
+                        z_dev = abs(self.data.qpos[2] - self.nominal_root_z)
+                        if tilt > 0.15 or z_dev > 0.05:
+                            self.recovery_ctrl.start_recovery()
                     if self.policy is not None:
                         self.policy.reset()
                 else:
-                    print("[PPO] Chưa có checkpoint! Chạy: python training/download_checkpoints.py")
+                    print("[PPO] Chua co checkpoint! Chay: python training/download_checkpoints.py")
 
-            # Phím K: Sập nguồn điện / Buông lỏng rơi tự do (Ragdoll Mode - Ngã đè lên sàn)
+            # Phím K: Sập nguồn điện / Ragdoll Mode — nhấn lại để khởi động đứng dậy mượt mà
             elif key == glfw.KEY_K:
                 if self.control_mode == "RAGDOLL":
                     self.control_mode = "PPO" if (self.policy is not None) else "PD"
                     print(f"[SẬP NGUỒN] Đã bật lại nguồn! Chế độ: {self.control_mode}")
+                    # Kích hoạt đứng dậy mượt mà từ tư thế nằm hiện tại
+                    if self.control_mode == "PD":
+                        self.recovery_ctrl.start_recovery()
                 else:
+                    # Đưa robot về ragdoll — hủy animation nếu đang đứng dậy
+                    self.recovery_ctrl.is_recovering = False
                     self.control_mode = "RAGDOLL"
-                    print("[SẬP NGUỒN] 🛑 ĐÃ TẮT NGUỒN (RAGDOLL)! Robot rơi tự do đè lên mặt sàn theo quán tính thực tế.")
+                    print("[SẬP NGUỒN] RAGDOLL! Robot roi tu do de len mat san.")
 
             # Điều chỉnh tốc độ mô phỏng
             elif key == glfw.KEY_1 and not mods:
@@ -1109,21 +1246,25 @@ class BlenderMuJoCoViewer:
         fr.draw_text(pwr_str, rx + 830, ry + 12, 'mono', 12, (180, 240, 180, 255))
 
         if self.paused:
-            badge_text = "ĐANG TẠM DỪNG"
+            badge_text = "DANG TAM DUNG"
             badge_color = (255, 120, 0, 255)
         elif self.control_mode == "RAGDOLL":
-            badge_text = "🛑 SẬP NGUỒN (RAGDOLL)"
+            badge_text = "SAP NGUON (RAGDOLL)"
             badge_color = (255, 70, 70, 255)
+        elif self.control_mode == "PD" and self.recovery_ctrl.is_recovering:
+            pct = min(self.recovery_ctrl.recover_time / self.recovery_ctrl.duration * 100, 100)
+            badge_text = f"DANG DUNG DAY... {pct:.0f}%"
+            badge_color = (255, 210, 60, 255)
         elif self.push_decay > 0.0:
-            badge_text = "ĐANG THỬ LỰC ĐẨY"
+            badge_text = "DANG THU LUC DAY"
             badge_color = (255, 180, 0, 255)
         elif self.control_mode == "PPO":
-            badge_text = "🧠 NÃO AI PPO (V15 100M)"
+            badge_text = "NAO AI PPO (V15 100M)"
             badge_color = (0, 220, 255, 255)
         else:
-            badge_text = "⚙️ PD CÂN BẰNG CHỦ ĐỘNG"
+            badge_text = "PD CAN BANG MEM (ON DINH)"
             badge_color = (0, 255, 140, 255)
-        fr.draw_text(badge_text, rx + rw - 260, ry + 12, 'bold', 12, badge_color)
+        fr.draw_text(badge_text, rx + rw - 280, ry + 12, 'bold', 12, badge_color)
 
     def _draw_left_diagnostic_dashboard(self, telem):
         """Bảng chẩn đoán bên trái (100% Tiếng Việt dễ hiểu)."""
