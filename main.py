@@ -583,9 +583,11 @@ class BlenderMuJoCoViewer:
         # --- Tải PPO Policy từ checkpoint v15 ---
         self.policy      = None
         self.policy_mode = False  # False=PD cứng, True=PPO brain
-        work_dir = os.path.dirname(os.path.abspath(model_path))
+        # model_path = .../google_deepmind_menagerie/apptronik_apollo/scene.xml
+        # Cần lên 3 cấp để đến project root D:\GitHub\medical-science
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(model_path))))
         ck_pattern = os.path.join(
-            os.path.dirname(work_dir),
+            project_root,
             "kaggle_output", "checkpoints_v15", "checkpoints", "*.npz"
         )
         ck_files = sorted(glob.glob(ck_pattern),
@@ -942,8 +944,8 @@ class BlenderMuJoCoViewer:
                 if self.policy is not None:
                     self.policy.reset()
 
-            # Phím P: Bật/tắt PPO Brain AI ↔ PD Controller
-            elif key == glfw.KEY_P:
+            # Phím B: Bật/tắt PPO Brain AI ↔ PD Controller
+            elif key == glfw.KEY_B:
                 if self.policy is not None:
                     self.policy_mode = not self.policy_mode
                     mode_str = "🧠 PPO BRAIN AI (v15, 100M steps)" if self.policy_mode else "⚙️  PD CỨNG (dự phòng)"
