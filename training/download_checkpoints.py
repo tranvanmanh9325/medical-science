@@ -13,7 +13,7 @@ def main():
     api_key  = creds["key"]
     kernel_slug = f"{username}/apollo-humanoid-mjx-training-dual-t4"
 
-    out_dir = os.path.join(root, "kaggle_output", "checkpoints_v5")
+    out_dir = os.path.join(root, "kaggle_output", "checkpoints_v15")
     os.makedirs(out_dir, exist_ok=True)
 
     auth = base64.b64encode(f"{username}:{api_key}".encode()).decode()

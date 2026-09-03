@@ -33,6 +33,102 @@ import glfw
 import OpenGL.GL as gl
 import mujoco
 
+# PPO Policy inference (numpy-only, no JAX needed at runtime)
+# Weights loaded from .npz checkpoint trained on Kaggle
+import glob
+
+
+
+
+# ==============================================================================
+# 0. PPO POLICY — NẠP CHECKPOINT & SUY LUẬN NUMPY THUẦN (KHÔNG CẦN JAX)
+# ==============================================================================
+class PPOPolicy:
+    """
+    Tải trọng số từ checkpoint .npz (định dạng flax flatten_dict sep='/') và
+    thực hiện suy luận deterministic: action = tanh(W3·elu(W2·elu(W1·obs+b1)+b2)+b3).
+    Kiến trúc khớp hoàn toàn với ActorCritic trong generate_kaggle_notebook.py.
+    """
+
+    def __init__(self, checkpoint_path: str, mj_model, nu: int):
+        self.nu = nu
+        self._load(checkpoint_path)
+
+        key_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_KEY, "stand")
+        if key_id < 0: key_id = 0
+        self.default_pose = mj_model.key_qpos[key_id][7:].copy()  # (nu,)
+        self.ctrl_range   = mj_model.actuator_ctrlrange.copy()     # (nu, 2)
+        self.action_scale = 0.1
+        self.prev_act     = np.zeros(nu)
+        print(f"[PPO POLICY] Loaded: {checkpoint_path}")
+        print(f"  Layers: obs({self._obs_dim}) → 512 → 256 → 128 → action({nu})")
+
+    def _load(self, path: str):
+        """Load flax flatten_dict weights (keys like 'params/Dense_0/kernel')."""
+        data = np.load(path)
+        keys = list(data.keys())
+
+        def get(pattern):
+            matches = [k for k in keys if pattern in k]
+            if not matches:
+                raise KeyError(f"Key pattern '{pattern}' not found in {keys[:10]}")
+            return data[matches[0]]
+
+        # Actor head: Dense_0..2 = hidden layers, Dense_3 = mean output
+        self.W = []
+        self.b = []
+        for i in range(3):  # hidden layers
+            self.W.append(get(f"Dense_{i}/kernel"))
+            self.b.append(get(f"Dense_{i}/bias"))
+        self.W_mean = get("Dense_3/kernel")
+        self.b_mean = get("Dense_3/bias")
+        self._obs_dim = self.W[0].shape[0]
+
+    @staticmethod
+    def _elu(x):
+        return np.where(x >= 0, x, np.expm1(x))
+
+    def get_obs(self, data, mj_model) -> np.ndarray:
+        """Build observation vector identical to training."""
+        qpos = data.qpos
+        qvel = data.qvel
+        qw, qx, qy, qz = qpos[3], qpos[4], qpos[5], qpos[6]
+        upvec = np.array([
+            2.0*(qx*qz + qw*qy),
+            2.0*(qy*qz - qw*qx),
+            1.0 - 2.0*(qx**2 + qy**2),
+        ])
+        linvel = qvel[:3]
+        angvel = qvel[3:6]
+        jpos   = qpos[7:7+self.nu] - self.default_pose
+        jvel   = qvel[6:6+self.nu]
+        obs    = np.concatenate([upvec, linvel, angvel, jpos, jvel, self.prev_act])
+        return np.clip(obs, -20.0, 20.0)
+
+    def infer(self, obs: np.ndarray) -> np.ndarray:
+        """Deterministic forward pass: action = tanh(mean). No noise."""
+        x = obs.astype(np.float32)
+        for W, b in zip(self.W, self.b):
+            x = self._elu(x @ W + b)
+        mean   = np.tanh(x @ self.W_mean + self.b_mean)
+        action = np.clip(mean, -1.0, 1.0)
+        return action
+
+    def step(self, data, mj_model) -> np.ndarray:
+        """
+        Trả về ctrl array để set vào data.ctrl.
+        ctrl = clip(default_pose + action * scale, ctrl_lo, ctrl_hi)
+        """
+        obs    = self.get_obs(data, mj_model)
+        action = self.infer(obs)
+        ctrl   = self.default_pose + action * self.action_scale
+        ctrl   = np.clip(ctrl, self.ctrl_range[:, 0], self.ctrl_range[:, 1])
+        self.prev_act = action.copy()
+        return ctrl
+
+    def reset(self):
+        self.prev_act = np.zeros(self.nu)
+
 
 # ==============================================================================
 # 1. BỘ KẾT XUẤT FONT TIẾNG VIỆT UNICODE ĐỘ PHÂN GIẢI CAO (OPENGL TEXTURE CACHE)
@@ -484,6 +580,29 @@ class BlenderMuJoCoViewer:
         self.root_body_id = 1
         self.nominal_root_z = 1.016
 
+        # --- Tải PPO Policy từ checkpoint v15 ---
+        self.policy      = None
+        self.policy_mode = False  # False=PD cứng, True=PPO brain
+        work_dir = os.path.dirname(os.path.abspath(model_path))
+        ck_pattern = os.path.join(
+            os.path.dirname(work_dir),
+            "kaggle_output", "checkpoints_v15", "checkpoints", "*.npz"
+        )
+        ck_files = sorted(glob.glob(ck_pattern),
+                          key=lambda p: int(''.join(filter(str.isdigit, os.path.basename(p))) or '0'))
+        if ck_files:
+            best_ck = ck_files[-1]  # checkpoint cuối = nhiều steps nhất
+            try:
+                self.policy = PPOPolicy(best_ck, self.model, self.model.nu)
+                self.policy_mode = True
+                print(f"[PPO] Brain AI đã nạp thành công! Phím P để bật/tắt.")
+            except Exception as e:
+                print(f"[PPO] Lỗi nạp checkpoint: {e}")
+                print("[PPO] Dùng PD controller dự phòng.")
+        else:
+            print(f"[PPO] Không tìm thấy checkpoint tại: {ck_pattern}")
+            print("[PPO] Chạy: python training/download_checkpoints.py")
+
         # Trạng thái mô phỏng
         self.paused = False
         self.sim_speed = 1.0
@@ -590,41 +709,55 @@ class BlenderMuJoCoViewer:
         print("[ROBOT] Đã đặt lại tư thế đứng thẳng chuẩn ban đầu")
 
     def _step_physics_with_balance(self):
-        """Bộ điều khiển cân bằng chủ động chống xô ngã + tự phục hồi tư thế đứng thẳng."""
-        key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "stand")
-        if key_id != -1 and self.model.key_ctrl.shape[1] == self.model.nu:
-            self.data.ctrl[:] = self.model.key_ctrl[key_id]
+        """
+        Bước vật lý:
+          - policy_mode=True  → PPO Brain AI (trained 100M steps) điều khiển khớp
+          - policy_mode=False → PD cứng dự phòng (hardcoded balance controller)
+        Phím P: bật/tắt giữa hai chế độ.
+        """
+        if self.policy_mode and self.policy is not None:
+            # ── PPO Brain AI mode ───────────────────────────────────────────
+            ctrl = self.policy.step(self.data, self.model)
+            self.data.ctrl[:] = ctrl
 
-        # 1. Giảm chấn độ cao hông (Treo thẳng đứng)
-        kp_z = 6000.0
-        kd_z = 600.0
-        z_err = self.nominal_root_z - self.data.qpos[2]
-        vz = self.data.qvel[2]
-        fz = self.gravity_comp + kp_z * z_err - kd_z * vz
+            # Vẫn áp lực đẩy thử nghiệm nếu đang test
+            if self.push_decay > 0.0:
+                self.data.xfrc_applied[self.root_body_id][:3] = self.push_force
+                self.push_decay -= self.model.opt.timestep
+                if self.push_decay <= 0.0:
+                    self.push_force = np.zeros(3)
+                    self.data.xfrc_applied[self.root_body_id][:] = 0.0
+        else:
+            # ── PD Cứng dự phòng (giữ nguyên code cũ) ─────────────────────
+            key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "stand")
+            if key_id != -1 and self.model.key_ctrl.shape[1] == self.model.nu:
+                self.data.ctrl[:] = self.model.key_ctrl[key_id]
 
-        # 2. Bộ điều khiển phục hồi góc nghiêng thân chủ động (Roll, Pitch, Yaw PD)
-        q = self.data.qpos[3:7]
-        kp_rot = 900.0
-        kd_rot = 140.0
-        tau_rx = -kp_rot * q[1] - kd_rot * self.data.qvel[3]
-        tau_ry = -kp_rot * q[2] - kd_rot * self.data.qvel[4]
-        tau_rz = -kp_rot * q[3] - kd_rot * self.data.qvel[5]
+            kp_z = 6000.0
+            kd_z = 600.0
+            z_err = self.nominal_root_z - self.data.qpos[2]
+            vz = self.data.qvel[2]
+            fz = self.gravity_comp + kp_z * z_err - kd_z * vz
 
-        total_applied_force = np.array([self.push_force[0], self.push_force[1], fz])
-        total_applied_torque = np.array([tau_rx, tau_ry, tau_rz])
+            q = self.data.qpos[3:7]
+            kp_rot, kd_rot = 900.0, 140.0
+            tau_rx = -kp_rot * q[1] - kd_rot * self.data.qvel[3]
+            tau_ry = -kp_rot * q[2] - kd_rot * self.data.qvel[4]
+            tau_rz = -kp_rot * q[3] - kd_rot * self.data.qvel[5]
 
-        self.data.xfrc_applied[self.root_body_id][:3] = total_applied_force
-        self.data.xfrc_applied[self.root_body_id][3:] = total_applied_torque
+            self.data.xfrc_applied[self.root_body_id][:3] = [self.push_force[0], self.push_force[1], fz]
+            self.data.xfrc_applied[self.root_body_id][3:]  = [tau_rx, tau_ry, tau_rz]
 
-        if self.push_decay > 0.0:
-            self.push_decay -= self.model.opt.timestep
-            if self.push_decay <= 0.0:
-                self.push_force = np.zeros(3)
+            if self.push_decay > 0.0:
+                self.push_decay -= self.model.opt.timestep
+                if self.push_decay <= 0.0:
+                    self.push_force = np.zeros(3)
 
         mujoco.mj_step(self.model, self.data)
 
         if self.frame_count % 3 == 0:
             self.trajectory_history.append(self.data.qpos[:3].copy())
+
 
     def inject_perturbation(self, fx=0.0, fy=0.0, duration=0.25):
         """Tác dụng lực đẩy xô thử nghiệm cân bằng."""
@@ -806,6 +939,19 @@ class BlenderMuJoCoViewer:
                 self.step_single_frame = True
             elif key == glfw.KEY_R:
                 self._reset_robot()
+                if self.policy is not None:
+                    self.policy.reset()
+
+            # Phím P: Bật/tắt PPO Brain AI ↔ PD Controller
+            elif key == glfw.KEY_P:
+                if self.policy is not None:
+                    self.policy_mode = not self.policy_mode
+                    mode_str = "🧠 PPO BRAIN AI (v15, 100M steps)" if self.policy_mode else "⚙️  PD CỨNG (dự phòng)"
+                    print(f"[CHẾ ĐỘ ĐIỀU KHIỂN] {mode_str}")
+                    if self.policy is not None:
+                        self.policy.reset()
+                else:
+                    print("[PPO] Chưa có checkpoint! Chạy: python training/download_checkpoints.py")
 
             # Điều chỉnh tốc độ mô phỏng
             elif key == glfw.KEY_1 and not mods:
