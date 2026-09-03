@@ -28,8 +28,37 @@
   </worldbody>
 
   <contact>
+    <!-- 1. Bàn chân: Tiếp xúc 6D ma sát cao chống trượt khi đứng & bước đi -->
     <pair geom1="collision_l_sole" geom2="floor" condim="6" solref="0.005 1" friction="2 2 0.01 0.0001 0.0001"/>
     <pair geom1="collision_r_sole" geom2="floor" condim="6" solref="0.005 1" friction="2 2 0.01 0.0001 0.0001"/>
+
+    <!-- 2. Va chạm toàn thân với mặt sàn khi ngã (Chống xuyên sàn, nằm trên mặt phẳng Z >= 0) -->
+    <!-- Đầu & Thân & Xương chậu -->
+    <pair geom1="collision_head" geom2="floor" condim="3" friction="0.8 0.8 0.01"/>
+    <pair geom1="collision_cylinder_torso" geom2="floor" condim="3" friction="0.8 0.8 0.01"/>
+    <pair geom1="collision_capsule_body_pelvis" geom2="floor" condim="3" friction="0.8 0.8 0.01"/>
+
+    <!-- Đùi & Khớp gối & Cẳng chân -->
+    <pair geom1="collision_capsule_body_l_thigh" geom2="floor" condim="3" friction="0.8 0.8 0.01"/>
+    <pair geom1="collision_capsule_body_r_thigh" geom2="floor" condim="3" friction="0.8 0.8 0.01"/>
+    <pair geom1="collision_capsule_body_l_shin" geom2="floor" condim="3" friction="0.8 0.8 0.01"/>
+    <pair geom1="collision_capsule_body_r_shin" geom2="floor" condim="3" friction="0.8 0.8 0.01"/>
+
+    <!-- Cánh tay, Khớp khuỷu & Bàn tay trái -->
+    <pair geom1="collision_capsule_body_l_arm_1" geom2="floor" condim="3" friction="0.7 0.7 0.01"/>
+    <pair geom1="collision_capsule_body_l_arm_2" geom2="floor" condim="3" friction="0.7 0.7 0.01"/>
+    <pair geom1="collision_capsule_body_l_arm_3" geom2="floor" condim="3" friction="0.7 0.7 0.01"/>
+    <pair geom1="collision_cylinder_l_arm" geom2="floor" condim="3" friction="0.7 0.7 0.01"/>
+    <pair geom1="collision_l_hand_plate" geom2="floor" condim="3" friction="0.7 0.7 0.01"/>
+
+    <!-- Cánh tay, Khớp khuỷu & Bàn tay phải -->
+    <pair geom1="collision_capsule_body_r_arm_1" geom2="floor" condim="3" friction="0.7 0.7 0.01"/>
+    <pair geom1="collision_capsule_body_r_arm_2" geom2="floor" condim="3" friction="0.7 0.7 0.01"/>
+    <pair geom1="collision_capsule_body_r_arm_3" geom2="floor" condim="3" friction="0.7 0.7 0.01"/>
+    <pair geom1="collision_cylinder_r_arm" geom2="floor" condim="3" friction="0.7 0.7 0.01"/>
+    <pair geom1="collision_r_hand_plate" geom2="floor" condim="3" friction="0.7 0.7 0.01"/>
+
+    <!-- 3. Tự va chạm an toàn giữa các chi -->
     <pair geom1="collision_cylinder_l_arm" geom2="collision_capsule_body_pelvis" condim="1"/>
     <pair geom1="collision_cylinder_r_arm" geom2="collision_capsule_body_pelvis" condim="1"/>
     <pair geom1="collision_capsule_body_l_thigh" geom2="collision_capsule_body_r_thigh" condim="1"/>

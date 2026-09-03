@@ -581,10 +581,8 @@ class BlenderMuJoCoViewer:
         self.nominal_root_z = 1.016
 
         # --- Tải PPO Policy từ checkpoint v15 ---
-        self.policy      = None
-        self.policy_mode = False  # False=PD cứng, True=PPO brain
-        # model_path = .../google_deepmind_menagerie/apptronik_apollo/scene.xml
-        # Cần lên 3 cấp để đến project root D:\GitHub\medical-science
+        self.policy       = None
+        self.control_mode = "PD"  # Chế độ: 'PPO' (Não AI), 'PD' (Bộ cân bằng cứng), 'RAGDOLL' (Sập nguồn rơi tự do)
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(model_path))))
         ck_pattern = os.path.join(
             project_root,
@@ -596,8 +594,8 @@ class BlenderMuJoCoViewer:
             best_ck = ck_files[-1]  # checkpoint cuối = nhiều steps nhất
             try:
                 self.policy = PPOPolicy(best_ck, self.model, self.model.nu)
-                self.policy_mode = True
-                print(f"[PPO] Brain AI đã nạp thành công! Phím P để bật/tắt.")
+                self.control_mode = "PPO"
+                print(f"[PPO] Brain AI đã nạp thành công! Phím B: Não AI/PD, Phím K: Sập nguồn Ragdoll.")
             except Exception as e:
                 print(f"[PPO] Lỗi nạp checkpoint: {e}")
                 print("[PPO] Dùng PD controller dự phòng.")
@@ -712,17 +710,28 @@ class BlenderMuJoCoViewer:
 
     def _step_physics_with_balance(self):
         """
-        Bước vật lý:
-          - policy_mode=True  → PPO Brain AI (trained 100M steps) điều khiển khớp
-          - policy_mode=False → PD cứng dự phòng (hardcoded balance controller)
-        Phím P: bật/tắt giữa hai chế độ.
+        Bước cập nhật động lực học vật lý đa chế độ:
+          - 'PPO'    : Não AI học tăng cường (100M steps) tự điều khiển góc khớp
+          - 'PD'     : Bộ cân bằng chủ động PD treo thẳng đứng (chống ngã)
+          - 'RAGDOLL': Sập nguồn điện (Motor Off / Zero Torque / Rơi tự do đè lên sàn)
         """
-        if self.policy_mode and self.policy is not None:
+        if self.control_mode == 'RAGDOLL':
+            # Ngắt toàn bộ lực nâng nhân tạo và mô-men xoắn
+            self.data.ctrl[:] = 0.0
+            self.data.xfrc_applied[self.root_body_id][:] = 0.0
+            if self.push_decay > 0.0:
+                self.data.xfrc_applied[self.root_body_id][:3] = self.push_force
+                self.push_decay -= self.model.opt.timestep
+                if self.push_decay <= 0.0:
+                    self.push_force = np.zeros(3)
+
+        elif self.control_mode == 'PPO' and self.policy is not None:
             # ── PPO Brain AI mode ───────────────────────────────────────────
             ctrl = self.policy.step(self.data, self.model)
             self.data.ctrl[:] = ctrl
+            self.data.xfrc_applied[self.root_body_id][:] = 0.0
 
-            # Vẫn áp lực đẩy thử nghiệm nếu đang test
+            # Áp dụng lực đẩy thử nghiệm nếu có
             if self.push_decay > 0.0:
                 self.data.xfrc_applied[self.root_body_id][:3] = self.push_force
                 self.push_decay -= self.model.opt.timestep
@@ -730,7 +739,7 @@ class BlenderMuJoCoViewer:
                     self.push_force = np.zeros(3)
                     self.data.xfrc_applied[self.root_body_id][:] = 0.0
         else:
-            # ── PD Cứng dự phòng (giữ nguyên code cũ) ─────────────────────
+            # ── PD Cứng dự phòng (Active Attitude Self-Righting) ───────────
             key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "stand")
             if key_id != -1 and self.model.key_ctrl.shape[1] == self.model.nu:
                 self.data.ctrl[:] = self.model.key_ctrl[key_id]
@@ -943,17 +952,28 @@ class BlenderMuJoCoViewer:
                 self._reset_robot()
                 if self.policy is not None:
                     self.policy.reset()
+                self.control_mode = "PPO" if (self.policy is not None) else "PD"
+                print(f"[ĐẶT LẠI] Robot đã về tư thế đứng thẳng chuẩn. Chế độ: {self.control_mode}")
 
-            # Phím B: Bật/tắt PPO Brain AI ↔ PD Controller
+            # Phím B: Chuyển đổi giữa Não AI PPO ↔ Bộ cân bằng PD cứng
             elif key == glfw.KEY_B:
                 if self.policy is not None:
-                    self.policy_mode = not self.policy_mode
-                    mode_str = "🧠 PPO BRAIN AI (v15, 100M steps)" if self.policy_mode else "⚙️  PD CỨNG (dự phòng)"
+                    self.control_mode = "PD" if self.control_mode == "PPO" else "PPO"
+                    mode_str = "🧠 PPO BRAIN AI (v15, 100M steps)" if self.control_mode == "PPO" else "⚙️  PD CÂN BẰNG CHỦ ĐỘNG"
                     print(f"[CHẾ ĐỘ ĐIỀU KHIỂN] {mode_str}")
                     if self.policy is not None:
                         self.policy.reset()
                 else:
                     print("[PPO] Chưa có checkpoint! Chạy: python training/download_checkpoints.py")
+
+            # Phím K: Sập nguồn điện / Buông lỏng rơi tự do (Ragdoll Mode - Ngã đè lên sàn)
+            elif key == glfw.KEY_K:
+                if self.control_mode == "RAGDOLL":
+                    self.control_mode = "PPO" if (self.policy is not None) else "PD"
+                    print(f"[SẬP NGUỒN] Đã bật lại nguồn! Chế độ: {self.control_mode}")
+                else:
+                    self.control_mode = "RAGDOLL"
+                    print("[SẬP NGUỒN] 🛑 ĐÃ TẮT NGUỒN (RAGDOLL)! Robot rơi tự do đè lên mặt sàn theo quán tính thực tế.")
 
             # Điều chỉnh tốc độ mô phỏng
             elif key == glfw.KEY_1 and not mods:
@@ -1088,8 +1108,21 @@ class BlenderMuJoCoViewer:
         pwr_str = f"CÔNG SUẤT: {telem['total_power']:.1f}W | NẶNG: {self.total_mass:.1f}kg"
         fr.draw_text(pwr_str, rx + 830, ry + 12, 'mono', 12, (180, 240, 180, 255))
 
-        badge_text = "ĐANG TẠM DỪNG" if self.paused else ("ĐANG THỬ LỰC ĐẨY" if self.push_decay > 0.0 else "CÂN BẰNG TỰ ĐỘNG (ỔN ĐỊNH)")
-        badge_color = (255, 120, 0, 255) if (self.paused or self.push_decay > 0.0) else (0, 255, 140, 255)
+        if self.paused:
+            badge_text = "ĐANG TẠM DỪNG"
+            badge_color = (255, 120, 0, 255)
+        elif self.control_mode == "RAGDOLL":
+            badge_text = "🛑 SẬP NGUỒN (RAGDOLL)"
+            badge_color = (255, 70, 70, 255)
+        elif self.push_decay > 0.0:
+            badge_text = "ĐANG THỬ LỰC ĐẨY"
+            badge_color = (255, 180, 0, 255)
+        elif self.control_mode == "PPO":
+            badge_text = "🧠 NÃO AI PPO (V15 100M)"
+            badge_color = (0, 220, 255, 255)
+        else:
+            badge_text = "⚙️ PD CÂN BẰNG CHỦ ĐỘNG"
+            badge_color = (0, 255, 140, 255)
         fr.draw_text(badge_text, rx + rw - 260, ry + 12, 'bold', 12, badge_color)
 
     def _draw_left_diagnostic_dashboard(self, telem):
@@ -1223,15 +1256,17 @@ class BlenderMuJoCoViewer:
         gl.glVertex2f(dx + dw, dy + dh); gl.glVertex2f(dx, dy + dh)
         gl.glEnd()
 
+        mode_tag = "NÃO AI" if self.control_mode == "PPO" else ("PD CỨNG" if self.control_mode == "PD" else "SẬP NGUỒN")
         shortcuts = [
             ("SPACE", "Chạy/Dừng"),
-            ("N", "Bước 1 Khung"),
-            ("1-4", f"Tốc độ:{self.sim_speed}x"),
+            ("B", f"Điều khiển:{mode_tag}"),
+            ("K", f"Ragdoll:{'BẬT' if self.control_mode == 'RAGDOLL' else 'TẮT'}"),
             ("MŨI TÊN/F", "Thử Đẩy Xô"),
-            ("TAB", "Ẩn/Hiện Bảng Số Liệu"),
-            ("F8", f"Giao diện:{'SÁNG' if self.theme_academic else 'TỐI'}"),
-            ("P", "Chụp Ảnh"),
-            ("R", "Đặt Lại Tư Thế")
+            ("R", "Đặt Lại"),
+            ("TAB", "Ẩn/Hiện HUD"),
+            ("1-4", f"Tốc độ:{self.sim_speed}x"),
+            ("F8", f"{'SÁNG' if self.theme_academic else 'TỐI'}"),
+            ("P", "Chụp Ảnh")
         ]
 
 

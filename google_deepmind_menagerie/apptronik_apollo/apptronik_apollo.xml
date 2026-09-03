@@ -135,6 +135,7 @@
                   <joint name="neck_pitch" axis="0 1 0" range="-0.261799 0.523599" actuatorfrcrange="-34.2 34.2"
                     damping="3" frictionloss="0" armature="0.00256298"/>
                   <geom quat="0.938794 0 0.344479 0" class="visual_light" mesh="afh_2_1_link"/>
+                  <geom name="collision_head" type="sphere" size="0.11" pos="0.04 0 0.02" class="collision"/>
                 </body>
               </body>
             </body>
