@@ -36,9 +36,78 @@ import mujoco
 # PPO Policy inference (numpy-only, no JAX needed at runtime)
 # Weights loaded from .npz checkpoint trained on Kaggle
 import glob
+import signal
+import atexit
+import ctypes
+from ctypes import wintypes
 
+# ==============================================================================
+# QUẢN LÝ TIẾN TRÌNH & THOÁT SẠCH SẼ TRÊN WINDOWS (CHỐNG TREO GPU 100%)
+# ==============================================================================
+ERROR_ALREADY_EXISTS = 183
 
+class WindowsSingleInstanceMutex:
+    """
+    Khóa đơn phiên bản sử dụng Windows Named Mutex (Kernel Object).
+    Nếu phát hiện đã có phiên bản Apollo 3D đang chạy, ngăn chặn khởi chạy đè
+    để tránh 2 phiên bản cùng tranh chấp và đẩy GPU lên 100%.
+    Khi tiến trình kết thúc (kể cả crash), Windows Kernel tự động thu hồi.
+    """
+    def __init__(self, mutex_name: str = "Apollo_MuJoCo_Simulation_Mutex"):
+        self.mutex_name = f"Local\\{mutex_name}"
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.mutex_handle = None
 
+    def acquire(self) -> bool:
+        CreateMutexW = self.kernel32.CreateMutexW
+        CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+        CreateMutexW.restype = wintypes.HANDLE
+
+        self.mutex_handle = CreateMutexW(None, False, self.mutex_name)
+        last_error = ctypes.get_last_error()
+        if last_error == ERROR_ALREADY_EXISTS:
+            if self.mutex_handle:
+                CloseHandle = self.kernel32.CloseHandle
+                CloseHandle.argtypes = [wintypes.HANDLE]
+                CloseHandle.restype = wintypes.BOOL
+                CloseHandle(self.mutex_handle)
+                self.mutex_handle = None
+            return False
+        return bool(self.mutex_handle)
+
+    def release(self):
+        if self.mutex_handle:
+            CloseHandle = self.kernel32.CloseHandle
+            CloseHandle.argtypes = [wintypes.HANDLE]
+            CloseHandle.restype = wintypes.BOOL
+            CloseHandle(self.mutex_handle)
+            self.mutex_handle = None
+
+# Bắt sự kiện người dùng bấm nút 'X' của Console Windows (CTRL_CLOSE_EVENT = 2)
+PHANDLER_ROUTINE = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+CTRL_C_EVENT        = 0
+CTRL_BREAK_EVENT    = 1
+CTRL_CLOSE_EVENT    = 2
+CTRL_LOGOFF_EVENT   = 5
+CTRL_SHUTDOWN_EVENT = 6
+
+def _console_ctrl_handler(ctrl_type: int) -> bool:
+    if ctrl_type in (CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT):
+        # os._exit gọi trực tiếp Win32 ExitProcess, ép OS giải phóng toàn bộ VRAM GPU ngay lập tức
+        os._exit(0)
+    return False
+
+_GLOBAL_HANDLER_REF = PHANDLER_ROUTINE(_console_ctrl_handler)
+
+def register_console_ctrl_handler():
+    if sys.platform == "win32":
+        try:
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.SetConsoleCtrlHandler.argtypes = [PHANDLER_ROUTINE, wintypes.BOOL]
+            kernel32.SetConsoleCtrlHandler.restype = wintypes.BOOL
+            kernel32.SetConsoleCtrlHandler(_GLOBAL_HANDLER_REF, True)
+        except Exception:
+            pass
 
 # ==============================================================================
 # 0. PPO POLICY — NẠP CHECKPOINT & SUY LUẬN NUMPY THUẦN (KHÔNG CẦN JAX)
@@ -924,6 +993,12 @@ class BlenderMuJoCoViewer:
         glfw.set_mouse_button_callback(self.window, self._on_mouse_button)
         glfw.set_scroll_callback(self.window, self._on_scroll)
         glfw.set_key_callback(self.window, self._on_key)
+        glfw.set_window_close_callback(self.window, self._on_window_close)
+
+    def _on_window_close(self, window):
+        """Kích hoạt khi người dùng nhấn nút 'X' trên cửa sổ 3D OpenGL."""
+        print("[MÔ PHỎNG] Đang đóng cửa sổ và giải phóng toàn bộ tài nguyên GPU...")
+        glfw.set_window_should_close(window, True)
 
     def _on_resize(self, window, w, h):
         self.width = max(1, w)
@@ -1064,6 +1139,11 @@ class BlenderMuJoCoViewer:
             if key == glfw.KEY_TAB:
                 self.show_hud = not self.show_hud
                 print(f"[GIAO DIỆN] Toàn bộ bảng số liệu 2D: {'HIỆN' if self.show_hud else 'ẨN (Toàn cảnh 3D)'}")
+
+            # Phím ESC hoặc Q: Thoát an toàn và đóng hoàn toàn ứng dụng
+            elif key in (glfw.KEY_ESCAPE, glfw.KEY_Q):
+                print("[MÔ PHỎNG] Đã nhấn phím thoát (ESC/Q). Đang giải phóng GPU và thoát...")
+                glfw.set_window_should_close(window, True)
 
             # Điều khiển mô phỏng
             elif key == glfw.KEY_SPACE:
@@ -1406,7 +1486,7 @@ class BlenderMuJoCoViewer:
             ("R", "Đặt Lại"),
             ("TAB", "Ẩn/Hiện HUD"),
             ("1-4", f"Tốc độ:{self.sim_speed}x"),
-            ("F8", f"{'SÁNG' if self.theme_academic else 'TỐI'}"),
+            ("ESC/Q", "Thoát Ứng Dụng"),
             ("P", "Chụp Ảnh")
         ]
 
@@ -1472,111 +1552,160 @@ class BlenderMuJoCoViewer:
         print(" - Phím TAB duy nhất: Ẩn/Hiện toàn bộ bảng thông số & đồ thị 2D   ")
         print(" - Quả cầu Gizmo Blender X/Y/Z: Luôn hiển thị cố định góc phải   ")
         print(" - Thử nghiệm lực đẩy xô: Phím Mũi Tên hoặc phím F               ")
+        print(" - Phím ESC / Q: Thoát ứng dụng an toàn và giải phóng 100% GPU   ")
         print(" - Chụp ảnh báo cáo: Phím P | Đổi nền sáng/tối: Phím F8          ")
         print("==================================================================")
 
         sim_accumulator = 0.0
         last_frame_time = time.time()
 
-        while not glfw.window_should_close(self.window):
-            glfw.poll_events()
+        try:
+            while not glfw.window_should_close(self.window):
+                glfw.poll_events()
 
-            now = time.time()
-            frame_dt = now - last_frame_time
-            last_frame_time = now
+                now = time.time()
+                frame_dt = now - last_frame_time
+                last_frame_time = now
 
-            self.frame_count += 1
-            if now - self.last_fps_time >= 0.5:
-                self.render_fps = self.frame_count / (now - self.last_fps_time)
-                self.physics_fps = 200.0 * self.sim_speed if not self.paused else 0.0
-                self.frame_count = 0
-                self.last_fps_time = now
+                self.frame_count += 1
+                if now - self.last_fps_time >= 0.5:
+                    self.render_fps = self.frame_count / (now - self.last_fps_time)
+                    self.physics_fps = 200.0 * self.sim_speed if not self.paused else 0.0
+                    self.frame_count = 0
+                    self.last_fps_time = now
 
-            self._update_camera_animation()
+                self._update_camera_animation()
 
-            if not self.paused:
-                sim_accumulator += frame_dt * self.sim_speed
-                steps_taken = 0
-                while sim_accumulator >= self.model.opt.timestep and steps_taken < 10:
+                if not self.paused:
+                    sim_accumulator += frame_dt * self.sim_speed
+                    steps_taken = 0
+                    while sim_accumulator >= self.model.opt.timestep and steps_taken < 10:
+                        self._step_physics_with_balance()
+                        sim_accumulator -= self.model.opt.timestep
+                        steps_taken += 1
+                elif self.step_single_frame:
                     self._step_physics_with_balance()
-                    sim_accumulator -= self.model.opt.timestep
-                    steps_taken += 1
-            elif self.step_single_frame:
-                self._step_physics_with_balance()
-                self.step_single_frame = False
+                    self.step_single_frame = False
 
-            telem = self.telemetry.update(self.data)
-            self.oscilloscope.append(
-                self.data.time,
-                telem['pelvis_z'],
-                telem['fz_left'],
-                telem['fz_right'],
-                telem['com_vel'][1]
-            )
+                telem = self.telemetry.update(self.data)
+                self.oscilloscope.append(
+                    self.data.time,
+                    telem['pelvis_z'],
+                    telem['fz_left'],
+                    telem['fz_right'],
+                    telem['com_vel'][1]
+                )
 
-            # 1. Kết xuất không gian 3D MuJoCo
-            w, h = glfw.get_framebuffer_size(self.window)
-            viewport = mujoco.MjrRect(0, 0, w, h)
+                # 1. Kết xuất không gian 3D MuJoCo
+                w, h = glfw.get_framebuffer_size(self.window)
+                viewport = mujoco.MjrRect(0, 0, w, h)
 
-            mujoco.mjv_updateScene(self.model, self.data, self.opt, None, self.cam, mujoco.mjtCatBit.mjCAT_ALL, self.scn)
-            self._inject_3d_scientific_overlays(telem)
-            mujoco.mjr_render(viewport, self.scn, self.con)
+                mujoco.mjv_updateScene(self.model, self.data, self.opt, None, self.cam, mujoco.mjtCatBit.mjCAT_ALL, self.scn)
+                self._inject_3d_scientific_overlays(telem)
+                mujoco.mjr_render(viewport, self.scn, self.con)
 
-            # 2. Kết xuất giao diện 2D Overlay
-            gl.glUseProgram(0)
-            gl.glBindVertexArray(0)
-            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
-            gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, 0)
-            gl.glDisable(gl.GL_LIGHTING)
-            gl.glDisable(gl.GL_CULL_FACE)
-            gl.glDisable(gl.GL_DEPTH_TEST)
-            gl.glDepthMask(gl.GL_FALSE)
-            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+                # 2. Kết xuất giao diện 2D Overlay
+                gl.glUseProgram(0)
+                gl.glBindVertexArray(0)
+                gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+                gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, 0)
+                gl.glDisable(gl.GL_LIGHTING)
+                gl.glDisable(gl.GL_CULL_FACE)
+                gl.glDisable(gl.GL_DEPTH_TEST)
+                gl.glDepthMask(gl.GL_FALSE)
+                gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
 
-            gl.glMatrixMode(gl.GL_PROJECTION)
-            gl.glPushMatrix()
-            gl.glLoadIdentity()
-            gl.glOrtho(0, self.width, self.height, 0, -1, 1)
+                gl.glMatrixMode(gl.GL_PROJECTION)
+                gl.glPushMatrix()
+                gl.glLoadIdentity()
+                gl.glOrtho(0, self.width, self.height, 0, -1, 1)
 
-            gl.glMatrixMode(gl.GL_MODELVIEW)
-            gl.glPushMatrix()
-            gl.glLoadIdentity()
+                gl.glMatrixMode(gl.GL_MODELVIEW)
+                gl.glPushMatrix()
+                gl.glLoadIdentity()
 
-            gl.glEnable(gl.GL_BLEND)
-            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+                gl.glEnable(gl.GL_BLEND)
+                gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
-            # Hiển thị các bảng số liệu khi show_hud = True
-            if self.show_hud:
-                self._draw_top_scientific_ribbon(telem)
-                self._draw_left_diagnostic_dashboard(telem)
-                
-                osc_w = min(440, self.width - 390)
-                self.oscilloscope.draw(self.width - osc_w - 16, 125, osc_w, 240, self.font_renderer)
+                # Hiển thị các bảng số liệu khi show_hud = True
+                if self.show_hud:
+                    self._draw_top_scientific_ribbon(telem)
+                    self._draw_left_diagnostic_dashboard(telem)
+                    
+                    osc_w = min(440, self.width - 390)
+                    self.oscilloscope.draw(self.width - osc_w - 16, 125, osc_w, 240, self.font_renderer)
 
-                self._draw_bottom_controls_dock()
+                    self._draw_bottom_controls_dock()
 
-            # Quả cầu định hướng Gizmo luôn luôn hiển thị cố định ở góc trên bên phải
-            self._draw_gizmo_overlay()
+                # Quả cầu định hướng Gizmo luôn luôn hiển thị cố định ở góc trên bên phải
+                self._draw_gizmo_overlay()
 
-            gl.glDisable(gl.GL_BLEND)
-            gl.glEnable(gl.GL_DEPTH_TEST)
-            gl.glDepthMask(gl.GL_TRUE)
+                gl.glDisable(gl.GL_BLEND)
+                gl.glEnable(gl.GL_DEPTH_TEST)
+                gl.glDepthMask(gl.GL_TRUE)
 
-            gl.glPopMatrix()
-            gl.glMatrixMode(gl.GL_PROJECTION)
-            gl.glPopMatrix()
-            gl.glMatrixMode(gl.GL_MODELVIEW)
+                gl.glPopMatrix()
+                gl.glMatrixMode(gl.GL_PROJECTION)
+                gl.glPopMatrix()
+                gl.glMatrixMode(gl.GL_MODELVIEW)
 
-            glfw.swap_buffers(self.window)
+                glfw.swap_buffers(self.window)
+        finally:
+            self.cleanup()
 
-        glfw.destroy_window(self.window)
-        glfw.terminate()
+    def cleanup(self):
+        """Giải phóng triệt để toàn bộ tài nguyên OpenGL, MuJoCo Context và đóng cửa sổ."""
+        try:
+            if hasattr(self, 'con') and self.con is not None:
+                mujoco.mjr_freeContext(self.con)
+                self.con = None
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'scn') and self.scn is not None:
+                mujoco.mjv_freeScene(self.scn)
+                self.scn = None
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'window') and self.window is not None:
+                glfw.destroy_window(self.window)
+                self.window = None
+        except Exception:
+            pass
+        try:
+            glfw.terminate()
+        except Exception:
+            pass
+        print("[HỆ THỐNG] Đã giải phóng 100% tài nguyên OpenGL / GPU và đóng phiên làm việc an toàn.")
 
 def main():
-    work_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(work_dir, "google_deepmind_menagerie", "apptronik_apollo", "scene.xml")
-    viewer = BlenderMuJoCoViewer(model_path)
-    viewer.run()
+    # 1. Single-Instance Mutex: Ngăn chặn mở trùng lặp nhiều phiên bản ngốn 100% GPU
+    mutex = WindowsSingleInstanceMutex("Apollo_MuJoCo_Simulation_Mutex")
+    if not mutex.acquire():
+        print("[CẢNH BÁO] Một phiên bản mô phỏng Apollo 3D khác đang chạy!", file=sys.stderr)
+        print("[CẢNH BÁO] Đã hủy khởi chạy phiên bản mới để bảo vệ GPU không bị quá nhiệt.", file=sys.stderr)
+        print("[HƯỚNG DẪN] Hãy đóng cửa sổ mô phỏng đang chạy trước, hoặc chạy lại run.bat để tự dọn dẹp.", file=sys.stderr)
+        os._exit(1)
+
+    # 2. Đăng ký Console Ctrl Handler bắt nút 'X' của cửa sổ Command Prompt
+    register_console_ctrl_handler()
+
+    # 3. Bắt tín hiệu ngắt SIGINT/SIGTERM
+    signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
+    signal.signal(signal.SIGTERM, lambda sig, frame: os._exit(0))
+
+    try:
+        work_dir = os.path.dirname(os.path.abspath(__file__))
+        model_path = os.path.join(work_dir, "google_deepmind_menagerie", "apptronik_apollo", "scene.xml")
+        viewer = BlenderMuJoCoViewer(model_path)
+        viewer.run()
+    except Exception as e:
+        print(f"[LỖI NGOẠI LỆ] {e}", file=sys.stderr)
+    finally:
+        mutex.release()
+        # os._exit gọi trực tiếp Win32 ExitProcess ép giải phóng toàn bộ luồng ngầm và VRAM GPU
+        os._exit(0)
 
 if __name__ == "__main__":
     main()
