@@ -1,0 +1,48 @@
+name: Colab Cloud Keeper
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/colab_keeper.yml'
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install google-colab-cli requests
+
+      - name: Configure Colab Credentials
+        env:
+          COLAB_TOKEN_JSON: ${{ secrets.COLAB_TOKEN_JSON }}
+          COLAB_SESSIONS_JSON: ${{ secrets.COLAB_SESSIONS_JSON }}
+        run: |
+          mkdir -p ~/.config/colab-cli
+          echo "$COLAB_TOKEN_JSON" > ~/.config/colab-cli/token.json
+          echo "$COLAB_SESSIONS_JSON" > ~/.config/colab-cli/sessions.json
+          chmod 600 ~/.config/colab-cli/token.json ~/.config/colab-cli/sessions.json
+
+      - name: Run Cloud Keeper
+        run: |
+          python -u training/colab_keeper.py
+
+      - name: Upload Final Model (if completed)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apollo_stage2_final_model
+          path: artifacts/
+          if-no-files-found: ignore
