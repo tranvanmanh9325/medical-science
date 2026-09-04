@@ -117,3 +117,17 @@ Velocity curriculum: [0,0.15]->[0,0.45]->[0,0.80] m/s | Checkpoints: /content/ch
 [0238/286] steps=124,780,544 | rew=0.01684 | loss=-0.4146 | sps=7,933 | push=80N | vx_max=0.80 | t=1677s *** WALKING ***
 [0239/286] steps=125,304,832 | rew=0.01740 | loss=-0.4151 | sps=7,935 | push=80N | vx_max=0.80 | t=1743s *** WALKING ***
 [0240/286] steps=125,829,120 | rew=0.01670 | loss=-0.4156 | sps=7,935 | push=80N | vx_max=0.80 | t=1809s *** WALKING ***
+[GITHUB PUSH INFO] Colab git push skipped (Command '['git', 'clone', '--depth', '1', 'https://x-access-token:ghs_15368_eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhdXRobmQiLCJjdHgiOiJrOGY0WjdITVUwRFZwZ2hfWDhTbVFEN3k2UjFKTnpZU2RfbEZIZTBnYVlvMU15bzF2MGZOby1JIiwiZXhwIjoxNzg4NTQ0OTQzLCJpYXQiOjE3ODg1NDEzNDMsImlzcyI6ImdpdGh1YiIsImp0aSI6IjRjZTkzZWUzLWY0ZGItNGZkYi05NDVlLTRjNmRmNmY1ZTZmMyIsInZlciI6M30.mtSCMf9UgYcBQm-fBA3ZHssbml9qYap3oC8NUgIDg6sqYsTDFBMYrx34bOloCi6C_W3rJa3Qf0OIn2CFKdTmfg@github.com/tranvanmanh9325/medical-science.git', '/content/medical_science_repo']' returned non-zero exit status 128.); checkpoint is safely auto-synced via Runner REST API.
+[0241/286] steps=126,353,408 | rew=0.01742 | loss=-0.4151 | sps=7,853 | push=80N | vx_max=0.80 | t=1956s *** WALKING ***
+[0242/286] steps=126,877,696 | rew=0.01724 | loss=-0.4157 | sps=7,929 | push=80N | vx_max=0.80 | t=2022s *** WALKING ***
+[0243/286] steps=127,401,984 | rew=0.01706 | loss=-0.4156 | sps=7,932 | push=80N | vx_max=0.80 | t=2088s *** WALKING ***
+[0244/286] steps=127,926,272 | rew=0.01700 | loss=-0.4153 | sps=7,917 | push=80N | vx_max=0.80 | t=2155s *** WALKING ***
+[0245/286] steps=128,450,560 | rew=0.01694 | loss=-0.4150 | sps=7,920 | push=80N | vx_max=0.80 | t=2221s *** WALKING ***
+[0246/286] steps=128,974,848 | rew=0.01713 | loss=-0.4149 | sps=7,921 | push=80N | vx_max=0.80 | t=2287s *** WALKING ***
+[0247/286] steps=129,499,136 | rew=0.01703 | loss=-0.4152 | sps=7,918 | push=80N | vx_max=0.80 | t=2353s *** WALKING ***
+[0248/286] steps=130,023,424 | rew=0.01719 | loss=-0.4155 | sps=7,926 | push=80N | vx_max=0.80 | t=2419s *** WALKING ***
+[0249/286] steps=130,547,712 | rew=0.01710 | loss=-0.4160 | sps=7,918 | push=80N | vx_max=0.80 | t=2486s *** WALKING ***
+[0250/286] steps=131,072,000 | rew=0.01715 | loss=-0.4164 | sps=7,915 | push=80N | vx_max=0.80 | t=2552s *** WALKING ***
+[0251/286] steps=131,596,288 | rew=0.01732 | loss=-0.4163 | sps=7,922 | push=80N | vx_max=0.80 | t=2618s *** WALKING ***
+[0252/286] steps=132,120,576 | rew=0.01751 | loss=-0.4166 | sps=7,952 | push=80N | vx_max=0.80 | t=2684s *** WALKING ***
+[0253/286] steps=132,644,864 | rew=0.01728 | loss=-0.4166 | sps=7,943 | push=80N | vx_max=0.80 | t=2750s *** WALKING ***
