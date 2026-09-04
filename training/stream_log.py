@@ -54,6 +54,47 @@ if ckpts:
         print(f"[COLAB] ĐÃ TẢI XONG FILE HOÀN CHỈNH DUY NHẤT: {local_target}\n", flush=True)
 
 
+def ensure_session_attached():
+    '''
+    Checks if SESSION_NAME is attached locally.
+    If not, iterates through colab_accounts, finds the account holding an active GPU VM,
+    switches to it, and adopts the session so streaming works seamlessly.
+    '''
+    check_sess = subprocess.run(["colab", "sessions"], capture_output=True, text=True)
+    if SESSION_NAME in check_sess.stdout:
+        return True
+
+    print("[STREAM] Đang tự động tìm kiếm phiên huấn luyện trên các tài khoản Google Colab...", flush=True)
+    sys.path.insert(0, os.path.join(ROOT, "training"))
+    import colab_pool
+    from colab_cli.common import state
+    from colab_cli.state import SessionState
+
+    for acc in colab_pool.list_accounts():
+        try:
+            colab_pool.switch_to_account(acc)
+            state._client = None
+            state._sessions = None
+            assigns = state.client.list_assignments()
+            if assigns:
+                a = assigns[0]
+                print(f"[STREAM] Tìm thấy máy ảo đang hoạt động trên {acc}: {a.endpoint}", flush=True)
+                s = SessionState(
+                    name=SESSION_NAME,
+                    token=a.runtime_proxy_info.token,
+                    url=a.runtime_proxy_info.url,
+                    endpoint=a.endpoint,
+                    variant="GPU",
+                    accelerator="T4",
+                )
+                state.store.add(s)
+                state._sessions = None
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def stream():
     print("=" * 64)
     print("  APOLLO STAGE 2 — LIVE STREAMING LOG (Final Checkpoint Only)")
@@ -61,11 +102,10 @@ def stream():
     print("  Nhấn Ctrl+C để thoát bất cứ lúc nào (server vẫn chạy tiếp)")
     print("=" * 64, flush=True)
 
-    # Check if session is alive
-    check_sess = subprocess.run(["colab", "sessions"], capture_output=True, text=True)
-    if SESSION_NAME not in check_sess.stdout:
-        print(f"\n[LỖI] Phiên '{SESSION_NAME}' hiện KHÔNG còn hoạt động trên Colab (đã bị ngắt hoặc giải phóng).")
-        print("Không thể stream log. Hãy kiểm tra trạng thái máy chủ.")
+    # Check and automatically adopt session across accounts
+    if not ensure_session_attached():
+        print(f"\n[LỖI] Phiên '{SESSION_NAME}' hiện KHÔNG còn hoạt động trên các tài khoản Colab.")
+        print("Không thể stream log. Hãy kiểm tra trạng thái GitHub Actions Cloud Runner.")
         return
 
     current_offset = 0
