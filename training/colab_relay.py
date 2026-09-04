@@ -78,6 +78,36 @@ def switch_account_and_reset(acc_name):
     state._sessions = None
 
 
+def is_gpu_assignment(assignment):
+    '''
+    Strictly verifies whether a Colab assignment is an active GPU VM (T4, L4, A100, H100, G4).
+    Strictly rejects CPU (NONE / DEFAULT) assignments.
+    '''
+    if not assignment:
+        return False
+    accel = str(getattr(assignment, "accelerator", "")).upper()
+    variant = str(getattr(assignment, "variant", "")).upper()
+
+    if "NONE" in accel:
+        return False
+
+    return any(g in accel for g in ["T4", "L4", "A100", "H100", "G4"]) or "GPU" in variant or variant == "1"
+
+
+def purge_non_gpu_assignments(acc_name, assigns):
+    '''
+    Releases any CPU VM assignments on the account so they do not block allocating a GPU VM.
+    '''
+    for a in assigns:
+        if not is_gpu_assignment(a):
+            try:
+                print(f"[RELAY PURGE] Máy ảo {a.endpoint} trên {acc_name} là CPU ({a.accelerator}). Đang thu hồi (unassign)...", flush=True)
+                state.client.unassign(a.endpoint)
+                print(f"[RELAY PURGE OK] Đã giải phóng thành công {a.endpoint} trên {acc_name}.", flush=True)
+            except Exception as e:
+                print(f"[RELAY PURGE WARNING] Lỗi khi giải phóng {a.endpoint}: {e}", flush=True)
+
+
 def is_vm_assigned_on_google(endpoint=None):
     '''
     Directly queries Google Colab control plane REST API (tun/m/list).
@@ -107,12 +137,16 @@ def fetch_remote_train_log():
     try:
         s = state.store.get(SESSION_NAME)
         if not s:
-            return False, "Session not found in store"
+            return False, "SESSION_NOT_FOUND"
         contents = ContentsClient(s)
         data = contents._request("GET", "content/train.log", params={"content": "1"})
         content = data.get("content", "")
         return True, content
+    except FileNotFoundError:
+        return False, "FILE_NOT_FOUND"
     except Exception as e:
+        if "404" in str(e) or "not found" in str(e).lower():
+            return False, "FILE_NOT_FOUND"
         return False, str(e)
 
 
@@ -161,7 +195,8 @@ except Exception:
 def check_and_adopt_assignment(acc_name):
     '''
     Checks if an active GPU assignment already exists on Colab for this account.
-    If so, adopts it into local colab-cli session state so commands can attach directly.
+    If a non-GPU assignment is found, automatically unassigns it to free the account.
+    If a valid GPU exists, adopts it into local colab-cli session state.
     '''
     try:
         assigns = state.client.list_assignments()
@@ -172,19 +207,47 @@ def check_and_adopt_assignment(acc_name):
     if not assigns:
         return False, False
 
-    a = assigns[0]
-    print(f"[RELAY] Phát hiện GPU VM đang hoạt động trên {acc_name}: {a.endpoint}", flush=True)
+    # Purge any non-GPU (CPU) assignments
+    purge_non_gpu_assignments(acc_name, assigns)
+
+    # Find valid GPU assignment
+    gpu_assign = None
+    for a in assigns:
+        if is_gpu_assignment(a):
+            gpu_assign = a
+            break
+
+    if not gpu_assign:
+        return False, False
+
+    print(f"[RELAY] Phát hiện GPU VM ({gpu_assign.accelerator}) đang hoạt động trên {acc_name}: {gpu_assign.endpoint}", flush=True)
+
+    accel_name = str(gpu_assign.accelerator).replace("Accelerator.", "")
+    if accel_name == "NONE":
+        accel_name = "T4"
 
     s = SessionState(
         name=SESSION_NAME,
-        token=a.runtime_proxy_info.token,
-        url=a.runtime_proxy_info.url,
-        endpoint=a.endpoint,
+        token=gpu_assign.runtime_proxy_info.token,
+        url=gpu_assign.runtime_proxy_info.url,
+        endpoint=gpu_assign.endpoint,
         variant="GPU",
-        accelerator="T4",
+        accelerator=accel_name,
     )
     state.store.add(s)
     state._sessions = None
+
+    try:
+        from colab_cli.commands.session import spawn_keep_alive
+        s.keep_alive_pid = spawn_keep_alive(
+            gpu_assign.endpoint,
+            SESSION_NAME,
+            auth_provider=state.auth_provider,
+            config_path=state.config_path,
+        )
+        state.store.add(s)
+    except Exception:
+        pass
 
     is_running = check_is_training_running()
     return True, is_running
@@ -200,15 +263,22 @@ def deploy_and_start_training(acc_name, is_new=True):
         if "Session READY" not in res.stdout and "READY" not in res.stdout:
             print(f"[RELAY WARNING] Cấp phát GPU thất bại trên {acc_name}: {err.strip()[:200]}")
             if "TooManyAssignmentsError" in err or "412" in err:
-                print(f"[RELAY] Tài khoản đã có máy ảo cấp phát từ trước, chuyển sang nhận diện phiên...", flush=True)
+                print(f"[RELAY] Tài khoản đã có máy ảo cấp phát từ trước, kiểm tra loại máy ảo...", flush=True)
                 has_vm, is_running = check_and_adopt_assignment(acc_name)
                 if has_vm:
                     if is_running:
                         return True
                     is_new = False
                 else:
-                    colab_pool.mark_account_exhausted(acc_name, hours=1)
-                    return False
+                    # Non-GPU VM was purged, retry allocating fresh GPU
+                    print(f"[RELAY] Đã giải phóng máy ảo CPU cũ, thử cấp phát lại GPU T4 trên {acc_name}...", flush=True)
+                    time.sleep(3)
+                    res2 = subprocess.run(["colab", "new", "-s", SESSION_NAME, "--gpu", "T4"], capture_output=True, text=True)
+                    if "Session READY" in res2.stdout or "READY" in res2.stdout:
+                        print(f"[RELAY OK] Phiên mới '{SESSION_NAME}' đã sẵn sàng trên {acc_name} sau khi giải phóng!", flush=True)
+                    else:
+                        colab_pool.mark_account_exhausted(acc_name, hours=1)
+                        return False
             elif "outcome" in err or "Service Unavailable" in err or "ResourceExhausted" in err:
                 colab_pool.mark_account_exhausted(acc_name, hours=12)
                 return False
@@ -231,7 +301,7 @@ except Exception:
 '''
     ok, out = safe_colab_exec(setup_code, timeout=180, retries=2)
     if not ok or ("ALL_INSTALLED" not in out and "INSTALL_OK" not in out):
-        print("[RELAY WARNING] Cài đặt thư viện có cảnh báo, tiếp tục kiểm tra...")
+        print(f"[RELAY WARNING] Cài đặt thư viện có cảnh báo ({out.strip()[:100]}), tiếp tục kiểm tra...")
 
     # 2. Upload assets
     print("[RELAY] Tải lên mô hình và mã nguồn...", flush=True)
@@ -259,18 +329,29 @@ except Exception:
 import subprocess
 cmd = 'GITHUB_TOKEN={gh_token} nohup python3 -u /content/train_stage2.py {resume_flag} > /content/train.log 2>&1 &'
 subprocess.Popen(cmd, shell=True)
-print('LAUNCHED')
+print('LAUNCHED_SUCCESSFULLY')
 '''
-    ok, out = safe_colab_exec(launch_code, timeout=35, retries=2)
+    ok, out = safe_colab_exec(launch_code, timeout=45, retries=3)
+    if not ok or "LAUNCHED_SUCCESSFULLY" not in out:
+        print(f"[RELAY ERROR] Lệnh khởi chạy train thất bại trên {acc_name}: {out}", flush=True)
+        return False
+
+    time.sleep(5)
+    if not check_is_training_running():
+        print(f"[RELAY ERROR] Tiến trình không còn chạy ngay sau khi kích hoạt trên {acc_name}!", flush=True)
+        ok_log, crash_log = fetch_remote_train_log()
+        if ok_log and crash_log:
+            print(f"[RELAY CRASH LOG]\n{crash_log[-1000:]}", flush=True)
+        return False
+
     print(f"[RELAY] Huấn luyện đã kích hoạt thành công trên {acc_name}!\n", flush=True)
     return True
 
 
 def find_account_with_active_assignment():
     '''
-    Scans the account pool to see if an account already has an active VM assignment.
-    This ensures that when a runner starts or restarts, it connects directly to the currently
-    running training VM instead of spinning up an unnecessary new VM.
+    Scans the account pool to see if an account already has an active GPU VM assignment.
+    Auto-purges any CPU assignments encountered so accounts are immediately clean for GPU allocation.
     '''
     accounts = colab_pool.list_accounts()
     status = colab_pool.load_status()
@@ -281,9 +362,16 @@ def find_account_with_active_assignment():
         try:
             switch_account_and_reset(acc)
             assigns = state.client.list_assignments()
-            if assigns:
-                print(f"[RELAY DISCOVERY] Phát hiện {acc} đang sở hữu máy ảo GPU: {assigns[0].endpoint}", flush=True)
-                return acc
+            if not assigns:
+                continue
+
+            # Check and purge CPU assignments
+            purge_non_gpu_assignments(acc, assigns)
+
+            for a in assigns:
+                if is_gpu_assignment(a):
+                    print(f"[RELAY DISCOVERY] Phát hiện {acc} đang sở hữu máy ảo GPU ({a.accelerator}): {a.endpoint}", flush=True)
+                    return acc
         except Exception:
             continue
     return None
@@ -305,10 +393,18 @@ def monitor_and_sync(acc_name):
     cycle = 0
     last_log_len = 0
     last_progress_time = time.time()
+    launch_time = time.time()
 
     while True:
         time.sleep(60)
         cycle += 1
+
+        # Keep alive ping to control plane on every cycle
+        if current_endpoint:
+            try:
+                state.client.keep_alive_assignment(current_endpoint)
+            except Exception:
+                pass
 
         # 1. Control Plane Check (fast 0.2s Google REST API check)
         is_alive, _ = is_vm_assigned_on_google(current_endpoint)
@@ -362,6 +458,17 @@ def monitor_and_sync(acc_name):
                 subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_final.npz", final_local])
                 git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_final.npz", "feat(weights): save final Apollo Stage 2 trained model (150M steps)")
                 return "COMPLETE"
+        elif log_content == "FILE_NOT_FOUND":
+            elapsed_from_start = time.time() - launch_time
+            if elapsed_from_start < 180:
+                print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [INIT] Đang khởi tạo mô hình / JIT compile JAX trên GPU ({int(elapsed_from_start)}s)...", flush=True)
+            else:
+                print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [CẢNH BÁO] train.log chưa xuất hiện sau {int(elapsed_from_start)}s! Kiểm tra trạng thái tiến trình...", flush=True)
+                if not check_is_training_running():
+                    print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [WARNING] Tiến trình train đã dừng trên máy ảo! Tự động khởi động lại...", flush=True)
+                    deploy_and_start_training(acc_name, is_new=False)
+                    last_progress_time = time.time()
+                    launch_time = time.time()
         else:
             print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [LOG REST WARNING] Không thể đọc log qua HTTP API: {log_content}", flush=True)
 
@@ -372,6 +479,7 @@ def monitor_and_sync(acc_name):
                 print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [WARNING] Tiến trình train đã dừng trên máy ảo! Tự động khởi động lại từ checkpoint gần nhất...", flush=True)
                 deploy_and_start_training(acc_name, is_new=False)
                 last_progress_time = time.time()
+                launch_time = time.time()
             else:
                 last_progress_time = time.time()  # Process is running, reset timer
 
@@ -381,7 +489,7 @@ def run_relay():
     print("  HỆ THỐNG ĐIỀU PHỐI XOAY VÒNG TÀI KHOẢN (Colab Relay Orchestrator)")
     print("=" * 64, flush=True)
 
-    # First check if an account is already actively running training
+    # First check if an account is already actively running training on a real GPU
     active_acc = find_account_with_active_assignment()
 
     while True:
@@ -402,10 +510,10 @@ def run_relay():
         has_assignment, is_running = check_and_adopt_assignment(acc)
 
         if has_assignment and is_running:
-            print(f"[RELAY] Huấn luyện đang chạy sẵn trên {acc}, gắn trực tiếp vào giám sát!", flush=True)
+            print(f"[RELAY] Huấn luyện GPU đang chạy sẵn trên {acc}, gắn trực tiếp vào giám sát!", flush=True)
             success = True
         elif has_assignment and not is_running:
-            print(f"[RELAY] Máy ảo {acc} đã có sẵn nhưng tiến trình đã dừng, khởi chạy lại...", flush=True)
+            print(f"[RELAY] Máy ảo GPU {acc} đã có sẵn nhưng tiến trình đã dừng, khởi chạy lại...", flush=True)
             success = deploy_and_start_training(acc, is_new=False)
         else:
             success = deploy_and_start_training(acc, is_new=True)
