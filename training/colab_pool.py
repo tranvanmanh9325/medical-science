@@ -46,7 +46,7 @@ def list_accounts():
     accounts = []
     if os.path.exists(ACCOUNTS_DIR):
         for f in os.listdir(ACCOUNTS_DIR):
-            if f.endswith(".json") and f != "pool_status.json":
+            if f.endswith(".json") and f != "pool_status.json" and not f.startswith("sessions_"):
                 acc_name = f.replace(".json", "")
                 accounts.append(acc_name)
     return sorted(accounts)
@@ -81,11 +81,70 @@ def mark_account_active(acc_name):
         save_status(status)
 
 
+CURRENT_ACC_FILE = os.path.join(CONFIG_DIR, ".current_account")
+SESSIONS_TARGET = os.path.join(CONFIG_DIR, "sessions.json")
+
+
+def get_current_account():
+    if os.path.exists(CURRENT_ACC_FILE):
+        try:
+            with open(CURRENT_ACC_FILE, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception:
+            pass
+    return None
+
+
 def switch_to_account(acc_name):
+    # Save current account's sessions before switching
+    prev_acc = get_current_account()
+    if prev_acc and os.path.exists(SESSIONS_TARGET):
+        backup_sess = os.path.join(CONFIG_DIR, f"sessions_{prev_acc}.json")
+        try:
+            shutil.copy2(SESSIONS_TARGET, backup_sess)
+        except Exception:
+            pass
+
     token_src = os.path.join(ACCOUNTS_DIR, f"{acc_name}.json")
     if not os.path.exists(token_src):
         raise FileNotFoundError(f"Không tìm thấy token cho {acc_name}")
+
+    # Ensure Google OAuth access token is valid and automatically refreshed
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        with open(token_src, "r", encoding="utf-8") as f:
+            token_data = json.load(f)
+        creds = Credentials.from_authorized_user_info(token_data)
+        if not creds.valid:
+            creds.refresh(Request())
+            new_data = json.loads(creds.to_json())
+            with open(token_src, "w", encoding="utf-8") as f:
+                json.dump(new_data, f, indent=2)
+    except Exception as e:
+        print(f"[POOL WARNING] Lỗi refresh token cho {acc_name}: {e}")
+
     shutil.copy2(token_src, TOKEN_TARGET)
+
+    # Restore session for target account if saved previously
+    target_sess = os.path.join(CONFIG_DIR, f"sessions_{acc_name}.json")
+    if os.path.exists(target_sess):
+        try:
+            shutil.copy2(target_sess, SESSIONS_TARGET)
+        except Exception:
+            pass
+    elif os.path.exists(SESSIONS_TARGET):
+        try:
+            os.remove(SESSIONS_TARGET)
+        except Exception:
+            pass
+
+    try:
+        with open(CURRENT_ACC_FILE, "w", encoding="utf-8") as f:
+            f.write(acc_name)
+    except Exception:
+        pass
+
     print(f"[POOL] Đã chuyển đổi token sang: {acc_name}")
     return True
 

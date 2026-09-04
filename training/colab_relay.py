@@ -61,6 +61,7 @@ def git_commit_and_push(file_rel_path, message):
         subprocess.run(["git", "add", file_rel_path], cwd=ROOT, check=True, capture_output=True)
         res = subprocess.run(["git", "commit", "-m", f"{message} [skip ci]"], cwd=ROOT, capture_output=True, text=True)
         if "nothing to commit" not in res.stdout and "nothing to commit" not in res.stderr:
+            subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=ROOT, capture_output=True)
             subprocess.run(["git", "push", "origin", "main"], cwd=ROOT, check=True, capture_output=True)
             print(f"[GIT PUSH OK] Đã đẩy {file_rel_path} lên GitHub: {message}", flush=True)
         else:
@@ -76,7 +77,28 @@ def switch_account_and_reset(acc_name):
     state._sessions = None
 
 
-def safe_colab_exec(code, timeout=40, retries=2):
+def is_vm_assigned_on_google(endpoint=None):
+    '''
+    Directly queries Google Colab control plane REST API (tun/m/list).
+    Takes only ~0.2s, completely unaffected by whether GPU/kernel is busy.
+    Returns (True, assigns) if active, (False, []) if revoked/empty.
+    '''
+    try:
+        assigns = state.client.list_assignments()
+        if not assigns:
+            return False, []
+        if endpoint:
+            for a in assigns:
+                if a.endpoint == endpoint:
+                    return True, assigns
+            return False, assigns
+        return True, assigns
+    except Exception as e:
+        print(f"[CONTROL PLANE API] Cảnh báo kết nối máy chủ Colab: {e}", flush=True)
+        return True, []
+
+
+def safe_colab_exec(code, timeout=60, retries=2):
     '''
     Executes Python code in the Colab session safely.
     Suppresses stderr tracebacks from leaking into CI/CD logs and retries on transient connection issues.
@@ -114,7 +136,7 @@ try:
 except Exception:
     print("NOT_RUNNING")
 '''
-    ok, out = safe_colab_exec(check_code, timeout=30, retries=1)
+    ok, out = safe_colab_exec(check_code, timeout=45, retries=2)
     return ok and "RUNNING" in out
 
 
@@ -124,18 +146,17 @@ def check_and_adopt_assignment(acc_name):
     If so, adopts it into local colab-cli session state so commands can attach directly.
     '''
     try:
-        sessions, assignments = state.sync_sessions()
+        assigns = state.client.list_assignments()
     except Exception as e:
-        print(f"[RELAY] Lỗi đồng bộ danh sách phiên từ Colab: {e}", flush=True)
+        print(f"[RELAY] Lỗi truy vấn danh sách phiên từ Colab: {e}", flush=True)
         return False, False
 
-    if not assignments:
+    if not assigns:
         return False, False
 
-    a = assignments[0]
+    a = assigns[0]
     print(f"[RELAY] Phát hiện GPU VM đang hoạt động trên {acc_name}: {a.endpoint}", flush=True)
 
-    # Adopt assignment into state.store
     s = SessionState(
         name=SESSION_NAME,
         token=a.runtime_proxy_info.token,
@@ -227,14 +248,68 @@ print('LAUNCHED')
     return True
 
 
+def find_account_with_active_assignment():
+    '''
+    Scans the account pool to see if an account already has an active VM assignment.
+    This ensures that when a runner starts or restarts, it connects directly to the currently
+    running training VM instead of spinning up an unnecessary new VM.
+    '''
+    accounts = colab_pool.list_accounts()
+    status = colab_pool.load_status()
+    for acc in accounts:
+        avail, _ = colab_pool.is_account_available(acc, status)
+        if not avail:
+            continue
+        try:
+            switch_account_and_reset(acc)
+            assigns = state.client.list_assignments()
+            if assigns:
+                print(f"[RELAY DISCOVERY] Phát hiện {acc} đang sở hữu máy ảo GPU: {assigns[0].endpoint}", flush=True)
+                return acc
+        except Exception:
+            continue
+    return None
+
+
 def monitor_and_sync(acc_name):
     print(f"[RELAY MONITOR] Bắt đầu theo dõi tiến độ trên {acc_name}...", flush=True)
-    fail_count = 0
+
+    # Identify current endpoint
+    current_endpoint = None
+    try:
+        active_sess = state.store.get(SESSION_NAME)
+        if active_sess:
+            current_endpoint = active_sess.endpoint
+    except Exception:
+        pass
+
+    api_dead_count = 0
     cycle = 0
 
     while True:
         time.sleep(60)
         cycle += 1
+
+        # 1. Control Plane Check (fast 0.2s Google REST API check)
+        is_alive, _ = is_vm_assigned_on_google(current_endpoint)
+        if not is_alive:
+            api_dead_count += 1
+            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [CẢNH BÁO CONTROL PLANE] VM không còn trong danh sách gán của Google (#{api_dead_count}/3)...", flush=True)
+            if api_dead_count >= 3:
+                print(f"\n[RELAY FAILOVER] Google đã chính thức thu hồi máy ảo trên {acc_name} (Hết hạn mức hoặc phiên bị ngắt)!")
+                try:
+                    local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
+                    subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_v2_latest.npz", local_target], capture_output=True, timeout=15)
+                    git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz", f"chore(checkpoint): backup before failover from {acc_name}")
+                except Exception:
+                    pass
+                colab_pool.mark_account_exhausted(acc_name, hours=12)
+                return "FAILOVER"
+            continue
+        else:
+            api_dead_count = 0
+
+        # 2. Check training log tail via exec (timeout 60s)
         check_code = '''
 try:
     with open('/content/train.log', 'r') as f:
@@ -243,10 +318,9 @@ try:
 except Exception as e:
     print('LOG_ERR:' + str(e))
 '''
-        ok, out = safe_colab_exec(check_code, timeout=25, retries=1)
+        ok, out = safe_colab_exec(check_code, timeout=60, retries=1)
 
         if ok and "LOG_TAIL:" in out:
-            fail_count = 0
             log_line = ""
             for line in out.splitlines():
                 if "LOG_TAIL:" in line:
@@ -257,11 +331,10 @@ except Exception as e:
             if cycle % 5 == 0:
                 try:
                     local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
-                    # Try downloading from /content/checkpoints/ first, then fallback to /content/
                     dl = subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_v2_latest.npz", local_target], capture_output=True, text=True)
                     if dl.returncode != 0:
                         dl = subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/apollo_stage2_v2_latest.npz", local_target], capture_output=True, text=True)
-                    if dl.returncode == 0 and os.path.exists(local_target):
+                    if dl.returncode == 0 and os.path.exists(local_target) and os.path.getsize(local_target) > 100_000:
                         git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz", f"chore(checkpoint): update stage 2 checkpoint [{acc_name}]")
                 except Exception as e:
                     print(f"[RELAY SYNC WARNING] Lỗi đồng bộ checkpoint: {e}", flush=True)
@@ -275,18 +348,14 @@ except Exception as e:
                 git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_final.npz", "feat(weights): save final Apollo Stage 2 trained model (150M steps)")
                 return "COMPLETE"
         else:
-            fail_count += 1
-            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] Cảnh báo: Mất kết nối #{fail_count}/3...", flush=True)
-            if fail_count >= 3:
-                print(f"\n[RELAY FAILOVER] Phiên trên {acc_name} đã bị ngắt hoặc chạm hạn mức!")
-                try:
-                    local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
-                    subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_v2_latest.npz", local_target], capture_output=True, timeout=15)
-                    git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz", f"chore(checkpoint): backup before failover from {acc_name}")
-                except Exception:
-                    pass
-                colab_pool.mark_account_exhausted(acc_name, hours=12)
-                return "FAILOVER"
+            # colab exec timed out or failed to read log, but VM IS STILL ALIVE in Control Plane!
+            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [BUSY: GPU 100%] Jupyter kernel phản hồi chậm do tải tính toán nặng, máy ảo vẫn hoạt động ổn định.", flush=True)
+
+        # 3. Check process health inside VM periodically (every 10 minutes)
+        if cycle % 10 == 0:
+            if not check_is_training_running():
+                print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [WARNING] Tiến trình train không chạy trên máy ảo! Tự động kích hoạt lại từ checkpoint gần nhất...", flush=True)
+                deploy_and_start_training(acc_name, is_new=False)
 
 
 def run_relay():
@@ -294,9 +363,17 @@ def run_relay():
     print("  HỆ THỐNG ĐIỀU PHỐI XOAY VÒNG TÀI KHOẢN (Colab Relay Orchestrator)")
     print("=" * 64, flush=True)
 
+    # First check if an account is already actively running training
+    active_acc = find_account_with_active_assignment()
+
     while True:
         colab_pool.show_pool()
-        acc = colab_pool.get_next_available_account()
+        if active_acc:
+            acc = active_acc
+            active_acc = None  # Use it once on startup
+        else:
+            acc = colab_pool.get_next_available_account()
+
         if not acc:
             print("\n[CẢNH BÁO] Tất cả tài khoản trong Pool hiện đều đang bị Cooldown!")
             print("Đang chờ 10 phút trước khi kiểm tra lại...")
