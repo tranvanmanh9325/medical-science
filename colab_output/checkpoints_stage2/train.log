@@ -142,3 +142,16 @@ Velocity curriculum: [0,0.15]->[0,0.45]->[0,0.80] m/s | Checkpoints: /content/ch
 [0262/286] steps=137,363,456 | rew=0.01742 | loss=-0.4169 | sps=7,940 | push=80N | vx_max=0.80 | t=3345s *** WALKING ***
 [0263/286] steps=137,887,744 | rew=0.01723 | loss=-0.4168 | sps=7,945 | push=80N | vx_max=0.80 | t=3411s *** WALKING ***
 [0264/286] steps=138,412,032 | rew=0.01699 | loss=-0.4168 | sps=7,942 | push=80N | vx_max=0.80 | t=3477s *** WALKING ***
+[GITHUB PUSH] Successfully pushed colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz to GitHub!
+[0265/286] steps=138,936,320 | rew=0.01720 | loss=-0.4169 | sps=7,851 | push=80N | vx_max=0.80 | t=3618s *** WALKING ***
+[0266/286] steps=139,460,608 | rew=0.01715 | loss=-0.4172 | sps=7,931 | push=80N | vx_max=0.80 | t=3684s *** WALKING ***
+[0267/286] steps=139,984,896 | rew=0.01721 | loss=-0.4175 | sps=7,942 | push=80N | vx_max=0.80 | t=3750s *** WALKING ***
+[0268/286] steps=140,509,184 | rew=0.01716 | loss=-0.4177 | sps=7,916 | push=80N | vx_max=0.80 | t=3816s *** WALKING ***
+[0269/286] steps=141,033,472 | rew=0.01716 | loss=-0.4179 | sps=7,937 | push=80N | vx_max=0.80 | t=3883s *** WALKING ***
+[0270/286] steps=141,557,760 | rew=0.01711 | loss=-0.4180 | sps=7,944 | push=80N | vx_max=0.80 | t=3949s *** WALKING ***
+[0271/286] steps=142,082,048 | rew=0.01724 | loss=-0.4175 | sps=7,926 | push=80N | vx_max=0.80 | t=4015s *** WALKING ***
+[0272/286] steps=142,606,336 | rew=0.01745 | loss=-0.4179 | sps=7,920 | push=80N | vx_max=0.80 | t=4081s *** WALKING ***
+[0273/286] steps=143,130,624 | rew=0.01715 | loss=-0.4178 | sps=7,917 | push=80N | vx_max=0.80 | t=4147s *** WALKING ***
+[0274/286] steps=143,654,912 | rew=0.01710 | loss=-0.4180 | sps=7,919 | push=80N | vx_max=0.80 | t=4213s *** WALKING ***
+[0275/286] steps=144,179,200 | rew=0.01712 | loss=-0.4180 | sps=7,922 | push=80N | vx_max=0.80 | t=4279s *** WALKING ***
+[0276/286] steps=144,703,488 | rew=0.01708 | loss=-0.4184 | sps=7,918 | push=80N | vx_max=0.80 | t=4346s *** WALKING ***

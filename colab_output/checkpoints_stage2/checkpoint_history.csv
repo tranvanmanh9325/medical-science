@@ -9,4 +9,4 @@ iteration,steps,progress_pct,reward,loss,sps,push,vx_max,status,file
 "0192/286","100,663,296","67.1%","0.01732","-0.4128","8,174","80N","0.62 m/s","*** WALKING ***","apollo_stage2_v2_latest.npz"
 "0204/286","106,954,752","71.3%","0.01699","-0.4135","8,179","80N","0.68 m/s","*** WALKING ***","apollo_stage2_v2_latest.npz"
 "0216/286","113,246,208","75.5%","0.01695","-0.4142","8,167","80N","0.74 m/s","*** WALKING ***","apollo_stage2_v2_latest.npz"
-"0264/286","138,412,032","92.3%","0.01699","-0.4168","7,942","80N","0.80 m/s","*** WALKING ***","apollo_stage2_v2_latest.npz (current)"
+"0276/286","144,703,488","96.5%","0.01708","-0.4184","7,918","80N","0.80 m/s","*** WALKING ***","apollo_stage2_v2_latest.npz (current)"
