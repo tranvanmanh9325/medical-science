@@ -1,0 +1,111 @@
+"""
+Apollo Stage 2 Training — Live Log Streamer (Final Model Only)
+Usage:
+    python training/stream_log.py
+"""
+
+import os
+import sys
+import time
+import json
+import re
+import subprocess
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOCAL_CKPT_DIR = os.path.join(ROOT, "colab_output", "checkpoints_stage2")
+SESSION_NAME = "stage2-train"
+
+
+def run_colab(code_str, timeout=15):
+    try:
+        cmd = ["colab", "exec", "-s", SESSION_NAME]
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        out, _ = p.communicate(input=code_str, timeout=timeout)
+        return out
+    except Exception as e:
+        return ""
+
+
+def download_final_model():
+    os.makedirs(LOCAL_CKPT_DIR, exist_ok=True)
+    print("\n[COLAB] Đang tải duy nhất file hoàn thiện cuối cùng về máy...")
+    code = """
+import glob, os, shutil
+ckpts = sorted(glob.glob('/content/checkpoints/*.npz'))
+if ckpts:
+    latest = ckpts[-1]
+    final_path = '/content/checkpoints/apollo_stage2_final.npz'
+    shutil.copy2(latest, final_path)
+    print(final_path)
+"""
+    raw = run_colab(code).strip()
+    match = re.search(r"(/content/checkpoints/apollo_stage2_final\.npz)", raw)
+    if match:
+        remote_file = match.group(1)
+        local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_final.npz")
+        subprocess.run(["colab", "download", "-s", SESSION_NAME, remote_file, local_target])
+        print(f"[COLAB] ĐÃ TẢI XONG FILE HOÀN CHỈNH DUY NHẤT: {local_target}\n", flush=True)
+
+
+def stream():
+    print("=" * 64)
+    print("  APOLLO STAGE 2 — LIVE STREAMING LOG (Final Checkpoint Only)")
+    print(f"  Session: {SESSION_NAME} | Tesla T4 GPU (Google Colab)")
+    print("  Nhấn Ctrl+C để thoát bất cứ lúc nào (server vẫn chạy tiếp)")
+    print("=" * 64, flush=True)
+
+    # Check if session is alive
+    check_sess = subprocess.run(["colab", "sessions"], capture_output=True, text=True)
+    if SESSION_NAME not in check_sess.stdout:
+        print(f"\n[LỖI] Phiên '{SESSION_NAME}' hiện KHÔNG còn hoạt động trên Colab (đã bị ngắt hoặc giải phóng).")
+        print("Không thể stream log. Hãy kiểm tra trạng thái máy chủ.")
+        return
+
+    current_offset = 0
+
+    while True:
+        try:
+            fetch_code = f"""
+import json
+with open('/content/train.log', 'r', encoding='utf-8') as f:
+    f.seek({current_offset})
+    new_text = f.read()
+    new_offset = f.tell()
+print('###DATA_START###')
+print(json.dumps({{'offset': new_offset, 'text': new_text}}))
+print('###DATA_END###')
+"""
+            out = run_colab(fetch_code)
+            match = re.search(r"###DATA_START###\s*(\{.*?\})\s*###DATA_END###", out, re.DOTALL)
+            if match:
+                data = json.loads(match.group(1))
+                current_offset = data["offset"]
+                new_text = data["text"]
+                if new_text:
+                    print(new_text, end="", flush=True)
+                    if "STAGE 2 v2 TRAINING COMPLETE!" in new_text:
+                        print("\n" + "=" * 64)
+                        print("  🎉🎉🎉 HUẤN LUYỆN STAGE 2 ĐÃ HOÀN TẤT 100%! 🎉🎉🎉")
+                        print("  👉 Hãy báo lại cho AI: 'Train xong rồi, hãy check giúp tôi'")
+                        print("=" * 64 + "\n", flush=True)
+                        download_final_model()
+                        return
+
+            time.sleep(10)
+
+        except KeyboardInterrupt:
+            print("\n[INFO] Đã tạm dừng xem log trên terminal. Máy chủ Colab vẫn đang tiếp tục train!")
+            break
+        except Exception:
+            time.sleep(5)
+
+
+if __name__ == "__main__":
+    stream()
