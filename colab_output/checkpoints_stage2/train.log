@@ -99,3 +99,9 @@ Velocity curriculum: [0,0.15]->[0,0.45]->[0,0.80] m/s | Checkpoints: /content/ch
 [0220/286] steps=115,343,360 | rew=0.01849 | loss=-0.4125 | sps=7,949 | push=80N | vx_max=0.76 | t=485s *** WALKING ***
 [0221/286] steps=115,867,648 | rew=0.01454 | loss=-0.4136 | sps=7,681 | push=80N | vx_max=0.76 | t=553s stepping
 [0222/286] steps=116,391,936 | rew=0.02051 | loss=-0.4131 | sps=7,935 | push=80N | vx_max=0.77 | t=619s *** WALKING ***
+[0223/286] steps=116,916,224 | rew=0.01409 | loss=-0.4142 | sps=7,936 | push=80N | vx_max=0.77 | t=685s stepping
+[0224/286] steps=117,440,512 | rew=0.01874 | loss=-0.4123 | sps=7,939 | push=80N | vx_max=0.78 | t=751s *** WALKING ***
+[0225/286] steps=117,964,800 | rew=0.01623 | loss=-0.4124 | sps=7,940 | push=80N | vx_max=0.78 | t=817s *** WALKING ***
+[0226/286] steps=118,489,088 | rew=0.01637 | loss=-0.4112 | sps=7,946 | push=80N | vx_max=0.79 | t=883s *** WALKING ***
+[0227/286] steps=119,013,376 | rew=0.01803 | loss=-0.4113 | sps=7,946 | push=80N | vx_max=0.79 | t=949s *** WALKING ***
+[0228/286] steps=119,537,664 | rew=0.01533 | loss=-0.4119 | sps=7,940 | push=80N | vx_max=0.80 | t=1015s stepping
