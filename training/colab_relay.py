@@ -12,6 +12,15 @@ import json
 import shutil
 import subprocess
 import re
+from datetime import datetime, timezone, timedelta
+
+VN_TZ = timezone(timedelta(hours=7))
+
+
+def get_vn_time_str(fmt="%H:%M:%S"):
+    '''Returns current timestamp in Vietnam timezone (UTC+7)'''
+    return datetime.now(VN_TZ).strftime(fmt)
+
 
 if sys.platform == "win32":
     try:
@@ -499,10 +508,10 @@ def monitor_and_sync(acc_name):
 
     api_dead_count = 0
     cycle = 0
-    last_log_len = 0
     last_progress_time = time.time()
     launch_time = time.time()
     consecutive_log_fails = 0
+    last_printed_line_idx = 0
 
     while True:
         time.sleep(60)
@@ -510,7 +519,7 @@ def monitor_and_sync(acc_name):
 
         # Proactive OAuth token refresh every 15 minutes (900 seconds)
         if cycle % 15 == 0:
-            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [PROACTIVE AUTH] Tự động gia hạn OAuth token...", flush=True)
+            print(f"[{get_vn_time_str()} | {acc_name}] [PROACTIVE AUTH] Tự động gia hạn OAuth token...", flush=True)
             colab_pool.refresh_account_token(acc_name)
             colab_pool.save_account_sessions(acc_name)
             state._client = None
@@ -527,7 +536,7 @@ def monitor_and_sync(acc_name):
         is_alive, _ = is_vm_assigned_on_google(current_endpoint, acc_name=acc_name)
         if not is_alive:
             api_dead_count += 1
-            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [CẢNH BÁO CONTROL PLANE] VM không còn trong danh sách gán của Google (#{api_dead_count}/3)...", flush=True)
+            print(f"[{get_vn_time_str()} | {acc_name}] [CẢNH BÁO CONTROL PLANE] VM không còn trong danh sách gán của Google (#{api_dead_count}/3)...", flush=True)
             if api_dead_count >= 3:
                 print(f"\n[RELAY FAILOVER] Google đã chính thức thu hồi máy ảo trên {acc_name} (Hết hạn mức hoặc phiên bị ngắt)!")
                 try:
@@ -548,13 +557,25 @@ def monitor_and_sync(acc_name):
 
         if ok and log_content:
             consecutive_log_fails = 0
-            lines = log_content.strip().splitlines()
-            if lines:
-                last_line = lines[-1].strip()
-                print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] {last_line}", flush=True)
+            raw_lines = [l.strip() for l in log_content.splitlines() if l.strip()]
 
-            if len(log_content) != last_log_len:
-                last_log_len = len(log_content)
+            # Reset cursor if log was cleared/restarted
+            if len(raw_lines) < last_printed_line_idx:
+                last_printed_line_idx = 0
+
+            if last_printed_line_idx == 0:
+                # First cycle: display the last 3 lines for immediate context
+                initial_slice = raw_lines[-3:] if len(raw_lines) >= 3 else raw_lines
+                for line in initial_slice:
+                    print(f"[{get_vn_time_str()} | {acc_name}] {line}", flush=True)
+                last_printed_line_idx = len(raw_lines)
+                last_progress_time = time.time()
+            elif len(raw_lines) > last_printed_line_idx:
+                # Strictly stream ONLY newly appended lines (never re-print old lines)
+                new_lines = raw_lines[last_printed_line_idx:]
+                for line in new_lines:
+                    print(f"[{get_vn_time_str()} | {acc_name}] {line}", flush=True)
+                last_printed_line_idx = len(raw_lines)
                 last_progress_time = time.time()
 
             # Periodically download latest checkpoint and commit to git every 5 minutes (~5 iters)
@@ -581,7 +602,7 @@ def monitor_and_sync(acc_name):
                 return "COMPLETE"
         elif log_content == "AUTH_EXPIRED":
             consecutive_log_fails += 1
-            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [AUTH RECOVERY] Token hết hạn (401), tự động refresh OAuth token và tái kết nối...", flush=True)
+            print(f"[{get_vn_time_str()} | {acc_name}] [AUTH RECOVERY] Token hết hạn (401), tự động refresh OAuth token và tái kết nối...", flush=True)
             colab_pool.refresh_account_token(acc_name)
             state._client = None
             state._auth_provider = None
@@ -590,7 +611,7 @@ def monitor_and_sync(acc_name):
             continue
         elif log_content == "SESSION_NOT_FOUND":
             consecutive_log_fails += 1
-            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [SESSION RECOVERY] Không tìm thấy phiên local (#{consecutive_log_fails}/5)! Đang tự động khôi phục...", flush=True)
+            print(f"[{get_vn_time_str()} | {acc_name}] [SESSION RECOVERY] Không tìm thấy phiên local (#{consecutive_log_fails}/5)! Đang tự động khôi phục...", flush=True)
             colab_pool.refresh_account_token(acc_name)
             state._client = None
             state._auth_provider = None
@@ -606,17 +627,18 @@ def monitor_and_sync(acc_name):
         elif log_content == "FILE_NOT_FOUND":
             elapsed_from_start = time.time() - launch_time
             if elapsed_from_start < 180:
-                print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [INIT] Đang khởi tạo mô hình / JIT compile JAX trên GPU ({int(elapsed_from_start)}s)...", flush=True)
+                print(f"[{get_vn_time_str()} | {acc_name}] [INIT] Đang khởi tạo mô hình / JIT compile JAX trên GPU ({int(elapsed_from_start)}s)...", flush=True)
             else:
-                print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [CẢNH BÁO] train.log chưa xuất hiện sau {int(elapsed_from_start)}s! Kiểm tra trạng thái tiến trình...", flush=True)
+                print(f"[{get_vn_time_str()} | {acc_name}] [CẢNH BÁO] train.log chưa xuất hiện sau {int(elapsed_from_start)}s! Kiểm tra trạng thái tiến trình...", flush=True)
                 if not check_is_training_running(acc_name):
-                    print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [WARNING] Tiến trình train đã dừng trên máy ảo! Tự động khởi động lại...", flush=True)
+                    print(f"[{get_vn_time_str()} | {acc_name}] [WARNING] Tiến trình train đã dừng trên máy ảo! Tự động khởi động lại...", flush=True)
                     deploy_and_start_training(acc_name, is_new=False)
                     last_progress_time = time.time()
                     launch_time = time.time()
+                    last_printed_line_idx = 0
         else:
             consecutive_log_fails += 1
-            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [LOG REST WARNING] Không thể đọc log qua HTTP API (#{consecutive_log_fails}/5): {log_content}", flush=True)
+            print(f"[{get_vn_time_str()} | {acc_name}] [LOG REST WARNING] Không thể đọc log qua HTTP API (#{consecutive_log_fails}/5): {log_content}", flush=True)
             if consecutive_log_fails >= 5:
                 is_alive, _ = is_vm_assigned_on_google(acc_name=acc_name)
                 if not is_alive:
@@ -626,12 +648,13 @@ def monitor_and_sync(acc_name):
 
         # 3. Check process health only if log has stalled for >10 minutes (600 seconds)
         if time.time() - last_progress_time > 600:
-            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [HEALTH CHECK] Log chưa cập nhật sau 10 phút, kiểm tra tiến trình python...", flush=True)
+            print(f"[{get_vn_time_str()} | {acc_name}] [HEALTH CHECK] Log chưa cập nhật sau 10 phút, kiểm tra tiến trình python...", flush=True)
             if not check_is_training_running(acc_name):
-                print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [WARNING] Tiến trình train đã dừng trên máy ảo! Tự động khởi động lại từ checkpoint gần nhất...", flush=True)
+                print(f"[{get_vn_time_str()} | {acc_name}] [WARNING] Tiến trình train đã dừng trên máy ảo! Tự động khởi động lại từ checkpoint gần nhất...", flush=True)
                 deploy_and_start_training(acc_name, is_new=False)
                 last_progress_time = time.time()
                 launch_time = time.time()
+                last_printed_line_idx = 0
             else:
                 last_progress_time = time.time()  # Process is running, reset timer
 

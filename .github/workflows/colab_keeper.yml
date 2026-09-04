@@ -7,6 +7,7 @@ on:
       - '.github/workflows/colab_keeper.yml'
       - 'training/colab_relay.py'
       - 'training/colab_pool.py'
+      - 'colab_deploy/train_stage2.py'
 
 jobs:
   keep-alive:
@@ -14,6 +15,8 @@ jobs:
     timeout-minutes: 360
     permissions:
       contents: write
+    env:
+      TZ: 'Asia/Ho_Chi_Minh'
 
     steps:
       - name: Checkout code

@@ -396,14 +396,13 @@ for it in range(start_it + 1, N_ITERS + 1):
     cur += STEPS_PER_IT
     sps = STEPS_PER_IT / max(1e-5, time.time() - t1)
     
-    # Log progress every 2 iterations (~40s) and on first iteration
-    if it % 2 == 0 or it == (start_it + 1):
-        r_val = float(mr)
-        vx_max, _, _ = get_curriculum_cmd_max(cur)
-        push_frac = min(1., max(0., (cur - PUSH_START_STEP) / (PUSH_MAX_STEP - PUSH_START_STEP)))
-        push_mag = PUSH_MAX_FORCE * push_frac if cur >= PUSH_START_STEP else 0.
-        status = ("*** WALKING WELL ***" if r_val > 0.022 else "*** WALKING ***" if r_val > 0.016 else "stepping" if r_val > 0.010 else "improving" if r_val > 0.006 else "...")
-        print(f"[{it:04d}/{N_ITERS}] steps={cur:,} | rew={r_val:.5f} | loss={float(loss):.4f} | sps={sps:,.0f} | push={push_mag:.0f}N | vx_max={vx_max:.2f} | t={time.time()-t0:.0f}s {status}", flush=True)
+    # Log progress every iteration (~65s)
+    r_val = float(mr)
+    vx_max, _, _ = get_curriculum_cmd_max(cur)
+    push_frac = min(1., max(0., (cur - PUSH_START_STEP) / (PUSH_MAX_STEP - PUSH_START_STEP)))
+    push_mag = PUSH_MAX_FORCE * push_frac if cur >= PUSH_START_STEP else 0.
+    status = ("*** WALKING WELL ***" if r_val > 0.022 else "*** WALKING ***" if r_val > 0.016 else "stepping" if r_val > 0.010 else "improving" if r_val > 0.006 else "...")
+    print(f"[{it:04d}/{N_ITERS}] steps={cur:,} | rew={r_val:.5f} | loss={float(loss):.4f} | sps={sps:,.0f} | push={push_mag:.0f}N | vx_max={vx_max:.2f} | t={time.time()-t0:.0f}s {status}", flush=True)
 
     # Save rotating checkpoint every 12 iters (~6.3M steps)
     if it % 12 == 0:
