@@ -105,3 +105,15 @@ Velocity curriculum: [0,0.15]->[0,0.45]->[0,0.80] m/s | Checkpoints: /content/ch
 [0226/286] steps=118,489,088 | rew=0.01637 | loss=-0.4112 | sps=7,946 | push=80N | vx_max=0.79 | t=883s *** WALKING ***
 [0227/286] steps=119,013,376 | rew=0.01803 | loss=-0.4113 | sps=7,946 | push=80N | vx_max=0.79 | t=949s *** WALKING ***
 [0228/286] steps=119,537,664 | rew=0.01533 | loss=-0.4119 | sps=7,940 | push=80N | vx_max=0.80 | t=1015s stepping
+[0229/286] steps=120,061,952 | rew=0.01848 | loss=-0.4122 | sps=7,933 | push=80N | vx_max=0.80 | t=1081s *** WALKING ***
+[0230/286] steps=120,586,240 | rew=0.01592 | loss=-0.4140 | sps=7,924 | push=80N | vx_max=0.80 | t=1148s stepping
+[0231/286] steps=121,110,528 | rew=0.01759 | loss=-0.4137 | sps=7,916 | push=80N | vx_max=0.80 | t=1214s *** WALKING ***
+[0232/286] steps=121,634,816 | rew=0.01767 | loss=-0.4149 | sps=7,914 | push=80N | vx_max=0.80 | t=1280s *** WALKING ***
+[0233/286] steps=122,159,104 | rew=0.01667 | loss=-0.4153 | sps=7,928 | push=80N | vx_max=0.80 | t=1346s *** WALKING ***
+[0234/286] steps=122,683,392 | rew=0.01802 | loss=-0.4149 | sps=7,939 | push=80N | vx_max=0.80 | t=1412s *** WALKING ***
+[0235/286] steps=123,207,680 | rew=0.01646 | loss=-0.4148 | sps=7,940 | push=80N | vx_max=0.80 | t=1478s *** WALKING ***
+[0236/286] steps=123,731,968 | rew=0.01767 | loss=-0.4141 | sps=7,937 | push=80N | vx_max=0.80 | t=1544s *** WALKING ***
+[0237/286] steps=124,256,256 | rew=0.01709 | loss=-0.4148 | sps=7,932 | push=80N | vx_max=0.80 | t=1610s *** WALKING ***
+[0238/286] steps=124,780,544 | rew=0.01684 | loss=-0.4146 | sps=7,933 | push=80N | vx_max=0.80 | t=1677s *** WALKING ***
+[0239/286] steps=125,304,832 | rew=0.01740 | loss=-0.4151 | sps=7,935 | push=80N | vx_max=0.80 | t=1743s *** WALKING ***
+[0240/286] steps=125,829,120 | rew=0.01670 | loss=-0.4156 | sps=7,935 | push=80N | vx_max=0.80 | t=1809s *** WALKING ***
