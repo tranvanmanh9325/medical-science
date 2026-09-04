@@ -22,6 +22,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCAL_CKPT_DIR = os.path.join(ROOT, "colab_output", "checkpoints_stage2")
 SESSION_NAME = "stage2-train"
 
+from colab_cli.common import state
+from colab_cli.contents import ContentsClient
+
 
 def run_colab(code_str, timeout=15):
     try:
@@ -60,14 +63,13 @@ def ensure_session_attached():
     If not, iterates through colab_accounts, finds the account holding an active GPU VM,
     switches to it, and adopts the session so streaming works seamlessly.
     '''
-    check_sess = subprocess.run(["colab", "sessions"], capture_output=True, text=True)
-    if SESSION_NAME in check_sess.stdout:
+    s = state.store.get(SESSION_NAME)
+    if s:
         return True
 
     print("[STREAM] Đang tự động tìm kiếm phiên huấn luyện trên các tài khoản Google Colab...", flush=True)
     sys.path.insert(0, os.path.join(ROOT, "training"))
     import colab_pool
-    from colab_cli.common import state
     from colab_cli.state import SessionState
 
     for acc in colab_pool.list_accounts():
@@ -108,37 +110,41 @@ def stream():
         print("Không thể stream log. Hãy kiểm tra trạng thái GitHub Actions Cloud Runner.")
         return
 
+    s = state.store.get(SESSION_NAME)
+    if not s:
+        print("[LỖI] Không tìm thấy phiên để kết nối.")
+        return
+
+    contents = ContentsClient(s)
     current_offset = 0
+
+    # Fetch initial log content instantly via HTTP REST API
+    try:
+        data = contents._request("GET", "content/train.log", params={"content": "1"})
+        full_text = data.get("content", "")
+        if full_text:
+            print(full_text, end="", flush=True)
+            current_offset = len(full_text)
+    except Exception as e:
+        print(f"[STREAM INFO] Đang chờ file log khởi tạo trên máy ảo...")
 
     while True:
         try:
-            fetch_code = f"""
-import json
-with open('/content/train.log', 'r', encoding='utf-8') as f:
-    f.seek({current_offset})
-    new_text = f.read()
-    new_offset = f.tell()
-print('###DATA_START###')
-print(json.dumps({{'offset': new_offset, 'text': new_text}}))
-print('###DATA_END###')
-"""
-            out = run_colab(fetch_code)
-            match = re.search(r"###DATA_START###\s*(\{.*?\})\s*###DATA_END###", out, re.DOTALL)
-            if match:
-                data = json.loads(match.group(1))
-                current_offset = data["offset"]
-                new_text = data["text"]
-                if new_text:
-                    print(new_text, end="", flush=True)
-                    if "STAGE 2 v2 TRAINING COMPLETE!" in new_text:
-                        print("\n" + "=" * 64)
-                        print("  🎉🎉🎉 HUẤN LUYỆN STAGE 2 ĐÃ HOÀN TẤT 100%! 🎉🎉🎉")
-                        print("  👉 Hãy báo lại cho AI: 'Train xong rồi, hãy check giúp tôi'")
-                        print("=" * 64 + "\n", flush=True)
-                        download_final_model()
-                        return
+            data = contents._request("GET", "content/train.log", params={"content": "1"})
+            full_text = data.get("content", "")
+            if len(full_text) > current_offset:
+                new_text = full_text[current_offset:]
+                current_offset = len(full_text)
+                print(new_text, end="", flush=True)
+                if "STAGE 2 v2 TRAINING COMPLETE!" in new_text:
+                    print("\n" + "=" * 64)
+                    print("  🎉🎉🎉 HUẤN LUYỆN STAGE 2 ĐÃ HOÀN TẤT 100%! 🎉🎉🎉")
+                    print("  👉 Hãy báo lại cho AI: 'Train xong rồi, hãy check giúp tôi'")
+                    print("=" * 64 + "\n", flush=True)
+                    download_final_model()
+                    return
 
-            time.sleep(10)
+            time.sleep(5)
 
         except KeyboardInterrupt:
             print("\n[INFO] Đã tạm dừng xem log trên terminal. Máy chủ Colab vẫn đang tiếp tục train!")

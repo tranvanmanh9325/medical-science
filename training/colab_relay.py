@@ -26,6 +26,7 @@ import colab_pool
 
 from colab_cli.common import state
 from colab_cli.state import SessionState
+from colab_cli.contents import ContentsClient
 
 SESSION_NAME = "stage2-train"
 LOCAL_CKPT_DIR = os.path.join(ROOT, "colab_output", "checkpoints_stage2")
@@ -98,22 +99,39 @@ def is_vm_assigned_on_google(endpoint=None):
         return True, []
 
 
-def safe_colab_exec(code, timeout=60, retries=2):
+def fetch_remote_train_log():
+    '''
+    Directly fetches /content/train.log via Google Colab HTTP REST API (ContentsClient).
+    Bypasses Jupyter kernel and WebSocket completely. Takes only ~0.2s and NEVER hangs.
+    '''
+    try:
+        s = state.store.get(SESSION_NAME)
+        if not s:
+            return False, "Session not found in store"
+        contents = ContentsClient(s)
+        data = contents._request("GET", "content/train.log", params={"content": "1"})
+        content = data.get("content", "")
+        return True, content
+    except Exception as e:
+        return False, str(e)
+
+
+def safe_colab_exec(code, timeout=90, retries=2):
     '''
     Executes Python code in the Colab session safely.
-    Suppresses stderr tracebacks from leaking into CI/CD logs and retries on transient connection issues.
+    Explicitly passes --timeout to colab-cli to prevent premature 30s timeouts.
     '''
     last_err = ""
     for attempt in range(retries + 1):
         try:
             p = subprocess.Popen(
-                ["colab", "exec", "-s", SESSION_NAME],
+                ["colab", "exec", "--timeout", str(timeout), "-s", SESSION_NAME],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            out, err = p.communicate(input=code, timeout=timeout)
+            out, err = p.communicate(input=code, timeout=timeout + 5)
             if p.returncode == 0:
                 return True, out
             last_err = err or out
@@ -285,6 +303,8 @@ def monitor_and_sync(acc_name):
 
     api_dead_count = 0
     cycle = 0
+    last_log_len = 0
+    last_progress_time = time.time()
 
     while True:
         time.sleep(60)
@@ -299,7 +319,7 @@ def monitor_and_sync(acc_name):
                 print(f"\n[RELAY FAILOVER] Google đã chính thức thu hồi máy ảo trên {acc_name} (Hết hạn mức hoặc phiên bị ngắt)!")
                 try:
                     local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
-                    subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_v2_latest.npz", local_target], capture_output=True, timeout=15)
+                    subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_v2_latest.npz", local_target], capture_output=True, timeout=20)
                     git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz", f"chore(checkpoint): backup before failover from {acc_name}")
                 except Exception:
                     pass
@@ -309,23 +329,18 @@ def monitor_and_sync(acc_name):
         else:
             api_dead_count = 0
 
-        # 2. Check training log tail via exec (timeout 60s)
-        check_code = '''
-try:
-    with open('/content/train.log', 'r') as f:
-        lines = f.readlines()
-        print('LOG_TAIL:' + (lines[-1].strip() if lines else 'EMPTY'))
-except Exception as e:
-    print('LOG_ERR:' + str(e))
-'''
-        ok, out = safe_colab_exec(check_code, timeout=60, retries=1)
+        # 2. Check training log via HTTP REST API (takes 0.2s, immune to GPU 100% load)
+        ok, log_content = fetch_remote_train_log()
 
-        if ok and "LOG_TAIL:" in out:
-            log_line = ""
-            for line in out.splitlines():
-                if "LOG_TAIL:" in line:
-                    log_line = line.replace("LOG_TAIL:", "").strip()
-            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] {log_line}", flush=True)
+        if ok and log_content:
+            lines = log_content.strip().splitlines()
+            if lines:
+                last_line = lines[-1].strip()
+                print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] {last_line}", flush=True)
+
+            if len(log_content) != last_log_len:
+                last_log_len = len(log_content)
+                last_progress_time = time.time()
 
             # Periodically download latest checkpoint and commit to git every 5 minutes (~5 iters)
             if cycle % 5 == 0:
@@ -339,7 +354,7 @@ except Exception as e:
                 except Exception as e:
                     print(f"[RELAY SYNC WARNING] Lỗi đồng bộ checkpoint: {e}", flush=True)
 
-            if "STAGE 2 v2 TRAINING COMPLETE!" in out:
+            if "STAGE 2 v2 TRAINING COMPLETE!" in log_content:
                 print("\n" + "=" * 64)
                 print("  🎉🎉🎉 HUẤN LUYỆN HOÀN TẤT 100%! CÁN ĐÍCH 150M BƯỚC! 🎉🎉🎉")
                 print("=" * 64, flush=True)
@@ -348,14 +363,17 @@ except Exception as e:
                 git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_final.npz", "feat(weights): save final Apollo Stage 2 trained model (150M steps)")
                 return "COMPLETE"
         else:
-            # colab exec timed out or failed to read log, but VM IS STILL ALIVE in Control Plane!
-            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [BUSY: GPU 100%] Jupyter kernel phản hồi chậm do tải tính toán nặng, máy ảo vẫn hoạt động ổn định.", flush=True)
+            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [LOG REST WARNING] Không thể đọc log qua HTTP API: {log_content}", flush=True)
 
-        # 3. Check process health inside VM periodically (every 10 minutes)
-        if cycle % 10 == 0:
+        # 3. Check process health only if log has stalled for >10 minutes (600 seconds)
+        if time.time() - last_progress_time > 600:
+            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [HEALTH CHECK] Log chưa cập nhật sau 10 phút, kiểm tra tiến trình python...", flush=True)
             if not check_is_training_running():
-                print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [WARNING] Tiến trình train không chạy trên máy ảo! Tự động kích hoạt lại từ checkpoint gần nhất...", flush=True)
+                print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [WARNING] Tiến trình train đã dừng trên máy ảo! Tự động khởi động lại từ checkpoint gần nhất...", flush=True)
                 deploy_and_start_training(acc_name, is_new=False)
+                last_progress_time = time.time()
+            else:
+                last_progress_time = time.time()  # Process is running, reset timer
 
 
 def run_relay():
