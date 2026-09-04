@@ -1,9 +1,9 @@
 # Apollo Stage 2 v2 - Nhật ký Huấn luyện & Checkpoints (Checkpoint History Log)
 
 - **Tài khoản Colab**: `account_2`
-- **Cập nhật lần cuối**: `2026-09-05 00:04:32 (Giờ Việt Nam)`
+- **Cập nhật lần cuối**: `2026-09-05 00:15:34 (Giờ Việt Nam)`
 - **Trạng thái**: Đang huấn luyện tích cực trên GPU T4
-- **Tổng số mốc checkpoint ghi nhận**: 9
+- **Tổng số mốc checkpoint ghi nhận**: 10
 
 | Iteration | Tổng bước (Steps) | Tiến độ (%) | Reward | Policy Loss | Tốc độ (SPS) | Lực đẩy | Vận tốc max | Trạng thái | Tệp Checkpoint |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -16,3 +16,4 @@
 | 0180/286 | 94,371,840 | 62.9% | 0.01698 | -0.4122 | 8,173 sps | 80N | 0.56 m/s | *** WALKING *** | `apollo_stage2_v2_latest.npz` |
 | 0192/286 | 100,663,296 | 67.1% | 0.01732 | -0.4128 | 8,174 sps | 80N | 0.62 m/s | *** WALKING *** | `apollo_stage2_v2_latest.npz` |
 | 0204/286 | 106,954,752 | 71.3% | 0.01699 | -0.4135 | 8,179 sps | 80N | 0.68 m/s | *** WALKING *** | `apollo_stage2_v2_latest.npz` |
+| 0216/286 | 113,246,208 | 75.5% | 0.01695 | -0.4142 | 8,167 sps | 80N | 0.74 m/s | *** WALKING *** | `apollo_stage2_v2_latest.npz` |

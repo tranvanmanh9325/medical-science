@@ -85,3 +85,10 @@ Velocity curriculum: [0,0.15]->[0,0.45]->[0,0.80] m/s | Checkpoints: /content/ch
 [0202/286] steps=105,906,176 | rew=0.01722 | loss=-0.4132 | sps=8,182 | push=80N | vx_max=0.67 | t=7117s *** WALKING ***
 [0204/286] steps=106,954,752 | rew=0.01699 | loss=-0.4135 | sps=8,179 | push=80N | vx_max=0.68 | t=7245s *** WALKING ***
   -> Backup checkpoint: /content/checkpoints/apollo_stage2_v2_latest.npz (891KB)
+[0206/286] steps=108,003,328 | rew=0.01707 | loss=-0.4137 | sps=8,179 | push=80N | vx_max=0.69 | t=7374s *** WALKING ***
+[0208/286] steps=109,051,904 | rew=0.01692 | loss=-0.4138 | sps=8,192 | push=80N | vx_max=0.70 | t=7502s *** WALKING ***
+[0210/286] steps=110,100,480 | rew=0.01696 | loss=-0.4139 | sps=8,214 | push=80N | vx_max=0.71 | t=7629s *** WALKING ***
+[0212/286] steps=111,149,056 | rew=0.01723 | loss=-0.4138 | sps=8,170 | push=80N | vx_max=0.72 | t=7758s *** WALKING ***
+[0214/286] steps=112,197,632 | rew=0.01692 | loss=-0.4140 | sps=8,168 | push=80N | vx_max=0.73 | t=7886s *** WALKING ***
+[0216/286] steps=113,246,208 | rew=0.01695 | loss=-0.4142 | sps=8,167 | push=80N | vx_max=0.74 | t=8014s *** WALKING ***
+  -> Backup checkpoint: /content/checkpoints/apollo_stage2_v2_latest.npz (891KB)
