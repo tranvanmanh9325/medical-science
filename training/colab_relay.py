@@ -116,7 +116,7 @@ def purge_non_gpu_assignments(acc_name, assigns):
                 print(f"[RELAY PURGE WARNING] Lỗi khi giải phóng {a.endpoint}: {e}", flush=True)
 
 
-def is_vm_assigned_on_google(endpoint=None):
+def is_vm_assigned_on_google(endpoint=None, acc_name=None):
     '''
     Directly queries Google Colab control plane REST API (tun/m/list).
     Takes only ~0.2s, completely unaffected by whether GPU/kernel is busy.
@@ -133,88 +133,26 @@ def is_vm_assigned_on_google(endpoint=None):
             return False, assigns
         return True, assigns
     except Exception as e:
+        err_str = str(e)
+        if ("401" in err_str or "auth" in err_str.lower()) and acc_name:
+            print(f"[CONTROL PLANE API] Token expired during list_assignments, refreshing for {acc_name}...", flush=True)
+            colab_pool.refresh_account_token(acc_name)
+            state._client = None
+            state._auth_provider = None
+            try:
+                assigns = state.client.list_assignments()
+                if not assigns:
+                    return False, []
+                if endpoint:
+                    for a in assigns:
+                        if a.endpoint == endpoint:
+                            return True, assigns
+                    return False, assigns
+                return True, assigns
+            except Exception:
+                pass
         print(f"[CONTROL PLANE API] Cảnh báo kết nối máy chủ Colab: {e}", flush=True)
         return True, []
-
-
-def fetch_remote_train_log():
-    '''
-    Directly fetches /content/train.log via Google Colab HTTP REST API (ContentsClient).
-    Bypasses Jupyter kernel and WebSocket completely. Takes only ~0.2s and NEVER hangs.
-    '''
-    try:
-        s = state.store.get(SESSION_NAME)
-        if not s:
-            return False, "SESSION_NOT_FOUND"
-        contents = ContentsClient(s)
-        data = contents._request("GET", "content/train.log", params={"content": "1"})
-        content = data.get("content", "")
-        return True, content
-    except FileNotFoundError:
-        return False, "FILE_NOT_FOUND"
-    except Exception as e:
-        if "404" in str(e) or "not found" in str(e).lower():
-            return False, "FILE_NOT_FOUND"
-        return False, str(e)
-
-
-def safe_colab_exec(code, timeout=90, retries=2):
-    '''
-    Executes Python code in the Colab session safely.
-    Explicitly passes --timeout to colab-cli to prevent premature 30s timeouts.
-    '''
-    last_err = ""
-    for attempt in range(retries + 1):
-        try:
-            p = subprocess.Popen(
-                ["colab", "exec", "--timeout", str(timeout), "-s", SESSION_NAME],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            out, err = p.communicate(input=code, timeout=timeout + 5)
-            if p.returncode == 0:
-                return True, out
-            last_err = err or out
-            if attempt < retries:
-                time.sleep(3)
-        except Exception as e:
-            last_err = str(e)
-            if attempt < retries:
-                time.sleep(3)
-    return False, last_err
-
-
-def check_is_training_running():
-    '''
-    Checks whether train_stage2.py is actively running in the Colab session.
-    First performs ultra-fast 0.1s HTTP REST check via train.log metadata and content.
-    If train.log contains active training markers, training is confirmed running without
-    touching the fragile WebSocket / Jupyter kernel.
-    Falls back to ps aux via safe_colab_exec only if train.log is missing.
-    '''
-    try:
-        s = state.store.get(SESSION_NAME)
-        if s:
-            contents = ContentsClient(s)
-            data = contents._request("GET", "content/train.log", params={"content": "1"})
-            content = data.get("content", "")
-            if content and any(m in content for m in ["steps=", "WALKING", "APOLLO HUMANOID", "RESUME SUCCESS", "[TRANSFER LEARNING]"]):
-                return True
-    except Exception:
-        pass
-
-    check_code = '''
-import subprocess
-try:
-    out = subprocess.check_output("ps aux | grep train_stage2.py | grep -v grep || true", shell=True, text=True)
-    print("RUNNING" if "train_stage2.py" in out else "NOT_RUNNING")
-except Exception:
-    print("NOT_RUNNING")
-'''
-    ok, out = safe_colab_exec(check_code, timeout=45, retries=2)
-    return ok and "RUNNING" in out
 
 
 def check_and_adopt_assignment(acc_name):
@@ -226,8 +164,18 @@ def check_and_adopt_assignment(acc_name):
     try:
         assigns = state.client.list_assignments()
     except Exception as e:
-        print(f"[RELAY] Lỗi truy vấn danh sách phiên từ Colab: {e}", flush=True)
-        return False, False
+        if "401" in str(e) or "auth" in str(e).lower():
+            colab_pool.refresh_account_token(acc_name)
+            state._client = None
+            state._auth_provider = None
+            try:
+                assigns = state.client.list_assignments()
+            except Exception as e2:
+                print(f"[RELAY] Lỗi truy vấn danh sách phiên sau khi refresh: {e2}", flush=True)
+                return False, False
+        else:
+            print(f"[RELAY] Lỗi truy vấn danh sách phiên từ Colab: {e}", flush=True)
+            return False, False
 
     if not assigns:
         return False, False
@@ -261,6 +209,7 @@ def check_and_adopt_assignment(acc_name):
     )
     state.store.add(s)
     state._sessions = None
+    colab_pool.save_account_sessions(acc_name)
 
     try:
         from colab_cli.commands.session import spawn_keep_alive
@@ -271,11 +220,140 @@ def check_and_adopt_assignment(acc_name):
             config_path=state.config_path,
         )
         state.store.add(s)
+        colab_pool.save_account_sessions(acc_name)
     except Exception:
         pass
 
-    is_running = check_is_training_running()
+    is_running = check_is_training_running(acc_name)
     return True, is_running
+
+
+def ensure_session_valid(acc_name):
+    '''
+    Guarantees that SESSION_NAME exists in state.store and sessions.json.
+    If missing (e.g. pruned by colab-cli on transient 401), restores it from
+    either backup sessions_{acc_name}.json or re-adopts from Google control plane.
+    '''
+    s = state.store.get(SESSION_NAME)
+    if s:
+        return True
+
+    # 1. Try restore from backup file
+    if colab_pool.restore_account_sessions(acc_name):
+        state._sessions = None
+        s = state.store.get(SESSION_NAME)
+        if s:
+            print(f"[RELAY HEAL] Khôi phục phiên '{SESSION_NAME}' từ file dự phòng cho {acc_name}!", flush=True)
+            return True
+
+    # 2. Try re-adopt from Google assignments
+    adopted, _ = check_and_adopt_assignment(acc_name)
+    if adopted:
+        print(f"[RELAY HEAL] Tái kết nối phiên '{SESSION_NAME}' từ Google control plane cho {acc_name}!", flush=True)
+        return True
+
+    return False
+
+
+def safe_colab_exec(code, timeout=90, retries=2, acc_name=None):
+    '''
+    Executes Python code in the Colab session safely.
+    Explicitly passes --timeout to colab-cli to prevent premature 30s timeouts.
+    If session is missing or pruned, auto-restores before running.
+    '''
+    if acc_name:
+        ensure_session_valid(acc_name)
+
+    last_err = ""
+    for attempt in range(retries + 1):
+        try:
+            p = subprocess.Popen(
+                ["colab", "exec", "--timeout", str(timeout), "-s", SESSION_NAME],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            out, err = p.communicate(input=code, timeout=timeout + 5)
+            if p.returncode == 0:
+                return True, out
+            last_err = err or out
+            if "Session" in last_err and "not found" in last_err.lower() and acc_name:
+                print(f"[RELAY HEAL] Phiên bị mất trong safe_colab_exec. Khôi phục lại cho {acc_name}...", flush=True)
+                ensure_session_valid(acc_name)
+            elif ("401" in last_err or "auth" in last_err.lower()) and acc_name:
+                print(f"[RELAY HEAL] Lỗi xác thực trong safe_colab_exec. Refresh token cho {acc_name}...", flush=True)
+                colab_pool.refresh_account_token(acc_name)
+                state._client = None
+                state._auth_provider = None
+                ensure_session_valid(acc_name)
+            if attempt < retries:
+                time.sleep(3)
+        except Exception as e:
+            last_err = str(e)
+            if attempt < retries:
+                time.sleep(3)
+    return False, last_err
+
+
+def check_is_training_running(acc_name=None):
+    '''
+    Checks whether train_stage2.py is actively running in the Colab session.
+    First performs ultra-fast 0.1s HTTP REST check via train.log metadata and content.
+    If train.log contains active training markers, training is confirmed running without
+    touching the fragile WebSocket / Jupyter kernel.
+    Falls back to ps aux via safe_colab_exec only if train.log is missing.
+    '''
+    if acc_name:
+        ensure_session_valid(acc_name)
+    try:
+        s = state.store.get(SESSION_NAME)
+        if s:
+            contents = ContentsClient(s)
+            data = contents._request("GET", "content/train.log", params={"content": "1"})
+            content = data.get("content", "")
+            if content and any(m in content for m in ["steps=", "WALKING", "APOLLO HUMANOID", "RESUME SUCCESS", "[TRANSFER LEARNING]"]):
+                return True
+    except Exception:
+        pass
+
+    check_code = '''
+import subprocess
+try:
+    out = subprocess.check_output("ps aux | grep train_stage2.py | grep -v grep || true", shell=True, text=True)
+    print("RUNNING" if "train_stage2.py" in out else "NOT_RUNNING")
+except Exception:
+    print("NOT_RUNNING")
+'''
+    ok, out = safe_colab_exec(check_code, timeout=45, retries=2, acc_name=acc_name)
+    return ok and "RUNNING" in out
+
+
+def fetch_remote_train_log(acc_name=None):
+    '''
+    Directly fetches /content/train.log via Google Colab HTTP REST API (ContentsClient).
+    Bypasses Jupyter kernel and WebSocket completely. Takes only ~0.2s and NEVER hangs.
+    If session is missing from local store, attempts automatic self-healing by re-adopting.
+    '''
+    try:
+        s = state.store.get(SESSION_NAME)
+        if not s and acc_name:
+            ensure_session_valid(acc_name)
+            s = state.store.get(SESSION_NAME)
+        if not s:
+            return False, "SESSION_NOT_FOUND"
+        contents = ContentsClient(s)
+        data = contents._request("GET", "content/train.log", params={"content": "1"})
+        return True, data.get("content", "")
+    except FileNotFoundError:
+        return False, "FILE_NOT_FOUND"
+    except Exception as e:
+        err_str = str(e)
+        if "404" in err_str:
+            return False, "FILE_NOT_FOUND"
+        elif "401" in err_str or "auth" in err_str.lower() or "unauthorized" in err_str.lower():
+            return False, "AUTH_EXPIRED"
+        return False, err_str
 
 
 def deploy_and_start_training(acc_name, is_new=True):
@@ -301,6 +379,7 @@ def deploy_and_start_training(acc_name, is_new=True):
                     res2 = subprocess.run(["colab", "new", "-s", SESSION_NAME, "--gpu", "T4"], capture_output=True, text=True)
                     if "Session READY" in res2.stdout or "READY" in res2.stdout:
                         print(f"[RELAY OK] Phiên mới '{SESSION_NAME}' đã sẵn sàng trên {acc_name} sau khi giải phóng!", flush=True)
+                        colab_pool.save_account_sessions(acc_name)
                     else:
                         colab_pool.mark_account_exhausted(acc_name, hours=1)
                         return False
@@ -312,6 +391,9 @@ def deploy_and_start_training(acc_name, is_new=True):
                 return False
         else:
             print(f"[RELAY OK] Phiên mới '{SESSION_NAME}' đã sẵn sàng trên {acc_name}!", flush=True)
+            colab_pool.save_account_sessions(acc_name)
+    else:
+        ensure_session_valid(acc_name)
 
     # 1. Install dependencies if needed
     print("[RELAY] Kiểm tra / cài đặt thư viện (mujoco, optax, flax)...", flush=True)
@@ -324,12 +406,13 @@ except Exception:
     subprocess.check_output('pip install -q mujoco mujoco-mjx optax flax==0.11.2', shell=True, text=True)
     print("INSTALL_OK")
 '''
-    ok, out = safe_colab_exec(setup_code, timeout=180, retries=2)
+    ok, out = safe_colab_exec(setup_code, timeout=180, retries=2, acc_name=acc_name)
     if not ok or ("ALL_INSTALLED" not in out and "INSTALL_OK" not in out):
         print(f"[RELAY WARNING] Cài đặt thư viện có cảnh báo ({out.strip()[:100]}), tiếp tục kiểm tra...")
 
     # 2. Upload assets
     print("[RELAY] Tải lên mô hình và mã nguồn...", flush=True)
+    ensure_session_valid(acc_name)
     model_zip = os.path.join(ROOT, "colab_deploy", "apollo_model.zip")
     stage1_npz = os.path.join(ROOT, "kaggle_dataset_stage1", "apollo_stage1_v15_step_99876864.npz")
     train_script = os.path.join(ROOT, "colab_deploy", "train_stage2.py")
@@ -356,15 +439,15 @@ cmd = 'GITHUB_TOKEN={gh_token} nohup python3 -u /content/train_stage2.py {resume
 subprocess.Popen(cmd, shell=True, start_new_session=True)
 print('LAUNCHED_SUCCESSFULLY')
 '''
-    ok, out = safe_colab_exec(launch_code, timeout=45, retries=3)
+    ok, out = safe_colab_exec(launch_code, timeout=45, retries=3, acc_name=acc_name)
     if not ok or "LAUNCHED_SUCCESSFULLY" not in out:
         print(f"[RELAY ERROR] Lệnh khởi chạy train thất bại trên {acc_name}: {out}", flush=True)
         return False
 
     time.sleep(5)
-    if not check_is_training_running():
+    if not check_is_training_running(acc_name):
         print(f"[RELAY ERROR] Tiến trình không còn chạy ngay sau khi kích hoạt trên {acc_name}!", flush=True)
-        ok_log, crash_log = fetch_remote_train_log()
+        ok_log, crash_log = fetch_remote_train_log(acc_name)
         if ok_log and crash_log:
             print(f"[RELAY CRASH LOG]\n{crash_log[-1000:]}", flush=True)
         return False
@@ -419,10 +502,19 @@ def monitor_and_sync(acc_name):
     last_log_len = 0
     last_progress_time = time.time()
     launch_time = time.time()
+    consecutive_log_fails = 0
 
     while True:
         time.sleep(60)
         cycle += 1
+
+        # Proactive OAuth token refresh every 15 minutes (900 seconds)
+        if cycle % 15 == 0:
+            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [PROACTIVE AUTH] Tự động gia hạn OAuth token...", flush=True)
+            colab_pool.refresh_account_token(acc_name)
+            colab_pool.save_account_sessions(acc_name)
+            state._client = None
+            state._auth_provider = None
 
         # Keep alive ping to control plane on every cycle
         if current_endpoint:
@@ -432,13 +524,14 @@ def monitor_and_sync(acc_name):
                 pass
 
         # 1. Control Plane Check (fast 0.2s Google REST API check)
-        is_alive, _ = is_vm_assigned_on_google(current_endpoint)
+        is_alive, _ = is_vm_assigned_on_google(current_endpoint, acc_name=acc_name)
         if not is_alive:
             api_dead_count += 1
             print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [CẢNH BÁO CONTROL PLANE] VM không còn trong danh sách gán của Google (#{api_dead_count}/3)...", flush=True)
             if api_dead_count >= 3:
                 print(f"\n[RELAY FAILOVER] Google đã chính thức thu hồi máy ảo trên {acc_name} (Hết hạn mức hoặc phiên bị ngắt)!")
                 try:
+                    ensure_session_valid(acc_name)
                     local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
                     subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_v2_latest.npz", local_target], capture_output=True, timeout=20)
                     git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz", f"chore(checkpoint): backup before failover from {acc_name}")
@@ -451,9 +544,10 @@ def monitor_and_sync(acc_name):
             api_dead_count = 0
 
         # 2. Check training log via HTTP REST API (takes 0.2s, immune to GPU 100% load)
-        ok, log_content = fetch_remote_train_log()
+        ok, log_content = fetch_remote_train_log(acc_name)
 
         if ok and log_content:
+            consecutive_log_fails = 0
             lines = log_content.strip().splitlines()
             if lines:
                 last_line = lines[-1].strip()
@@ -466,6 +560,7 @@ def monitor_and_sync(acc_name):
             # Periodically download latest checkpoint and commit to git every 5 minutes (~5 iters)
             if cycle % 5 == 0:
                 try:
+                    ensure_session_valid(acc_name)
                     local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
                     dl = subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_v2_latest.npz", local_target], capture_output=True, text=True)
                     if dl.returncode != 0:
@@ -480,27 +575,59 @@ def monitor_and_sync(acc_name):
                 print("  🎉🎉🎉 HUẤN LUYỆN HOÀN TẤT 100%! CÁN ĐÍCH 150M BƯỚC! 🎉🎉🎉")
                 print("=" * 64, flush=True)
                 final_local = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_final.npz")
+                ensure_session_valid(acc_name)
                 subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_final.npz", final_local])
                 git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_final.npz", "feat(weights): save final Apollo Stage 2 trained model (150M steps)")
                 return "COMPLETE"
+        elif log_content == "AUTH_EXPIRED":
+            consecutive_log_fails += 1
+            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [AUTH RECOVERY] Token hết hạn (401), tự động refresh OAuth token và tái kết nối...", flush=True)
+            colab_pool.refresh_account_token(acc_name)
+            state._client = None
+            state._auth_provider = None
+            state._sessions = None
+            ensure_session_valid(acc_name)
+            continue
+        elif log_content == "SESSION_NOT_FOUND":
+            consecutive_log_fails += 1
+            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [SESSION RECOVERY] Không tìm thấy phiên local (#{consecutive_log_fails}/5)! Đang tự động khôi phục...", flush=True)
+            colab_pool.refresh_account_token(acc_name)
+            state._client = None
+            state._auth_provider = None
+            state._sessions = None
+            healed = ensure_session_valid(acc_name)
+            if not healed:
+                is_alive, _ = is_vm_assigned_on_google(acc_name=acc_name)
+                if not is_alive and consecutive_log_fails >= 3:
+                    print(f"[RELAY FAILOVER] Máy ảo trên {acc_name} đã mất thực sự trên Google!")
+                    colab_pool.mark_account_exhausted(acc_name, hours=12)
+                    return "FAILOVER"
+            continue
         elif log_content == "FILE_NOT_FOUND":
             elapsed_from_start = time.time() - launch_time
             if elapsed_from_start < 180:
                 print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [INIT] Đang khởi tạo mô hình / JIT compile JAX trên GPU ({int(elapsed_from_start)}s)...", flush=True)
             else:
                 print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [CẢNH BÁO] train.log chưa xuất hiện sau {int(elapsed_from_start)}s! Kiểm tra trạng thái tiến trình...", flush=True)
-                if not check_is_training_running():
+                if not check_is_training_running(acc_name):
                     print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [WARNING] Tiến trình train đã dừng trên máy ảo! Tự động khởi động lại...", flush=True)
                     deploy_and_start_training(acc_name, is_new=False)
                     last_progress_time = time.time()
                     launch_time = time.time()
         else:
-            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [LOG REST WARNING] Không thể đọc log qua HTTP API: {log_content}", flush=True)
+            consecutive_log_fails += 1
+            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [LOG REST WARNING] Không thể đọc log qua HTTP API (#{consecutive_log_fails}/5): {log_content}", flush=True)
+            if consecutive_log_fails >= 5:
+                is_alive, _ = is_vm_assigned_on_google(acc_name=acc_name)
+                if not is_alive:
+                    print(f"[RELAY FAILOVER] Quá 5 lần lỗi log và máy ảo không còn trên Google Colab!")
+                    colab_pool.mark_account_exhausted(acc_name, hours=12)
+                    return "FAILOVER"
 
         # 3. Check process health only if log has stalled for >10 minutes (600 seconds)
         if time.time() - last_progress_time > 600:
             print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [HEALTH CHECK] Log chưa cập nhật sau 10 phút, kiểm tra tiến trình python...", flush=True)
-            if not check_is_training_running():
+            if not check_is_training_running(acc_name):
                 print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] [WARNING] Tiến trình train đã dừng trên máy ảo! Tự động khởi động lại từ checkpoint gần nhất...", flush=True)
                 deploy_and_start_training(acc_name, is_new=False)
                 last_progress_time = time.time()
@@ -554,6 +681,7 @@ def run_relay():
             break
         elif res == "FAILOVER":
             print("[RELAY] Tiếp tục vòng lặp chuyển giao sang tài khoản kế tiếp...")
+            pull_git_latest()
             time.sleep(5)
             continue
 

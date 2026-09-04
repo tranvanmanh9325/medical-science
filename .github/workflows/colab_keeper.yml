@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/colab_keeper.yml'
       - 'training/colab_relay.py'
+      - 'training/colab_pool.py'
 
 jobs:
   keep-alive:

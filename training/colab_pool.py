@@ -149,6 +149,53 @@ def switch_to_account(acc_name):
     return True
 
 
+def refresh_account_token(acc_name):
+    '''
+    Proactively refreshes the OAuth access token for an account before it expires (3600s limit).
+    Updates token.json in both ACCOUNTS_DIR and CONFIG_DIR so colab-cli always has a valid token.
+    '''
+    token_src = os.path.join(ACCOUNTS_DIR, f"{acc_name}.json")
+    if not os.path.exists(token_src):
+        return False
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        with open(token_src, "r", encoding="utf-8") as f:
+            token_data = json.load(f)
+        creds = Credentials.from_authorized_user_info(token_data)
+        creds.refresh(Request())
+        new_data = json.loads(creds.to_json())
+        with open(token_src, "w", encoding="utf-8") as f:
+            json.dump(new_data, f, indent=2)
+        shutil.copy2(token_src, TOKEN_TARGET)
+        return True
+    except Exception as e:
+        print(f"[POOL WARNING] Lỗi proactive refresh token cho {acc_name}: {e}", flush=True)
+        return False
+
+
+def save_account_sessions(acc_name):
+    '''Saves a backup copy of current sessions.json specifically for acc_name'''
+    if os.path.exists(SESSIONS_TARGET):
+        backup_sess = os.path.join(CONFIG_DIR, f"sessions_{acc_name}.json")
+        try:
+            shutil.copy2(SESSIONS_TARGET, backup_sess)
+        except Exception:
+            pass
+
+
+def restore_account_sessions(acc_name):
+    '''Restores sessions.json from backup sessions_{acc_name}.json if present'''
+    backup_sess = os.path.join(CONFIG_DIR, f"sessions_{acc_name}.json")
+    if os.path.exists(backup_sess):
+        try:
+            shutil.copy2(backup_sess, SESSIONS_TARGET)
+            return True
+        except Exception:
+            pass
+    return False
+
+
 def get_next_available_account(exclude=None):
     accounts = list_accounts()
     status = load_status()
