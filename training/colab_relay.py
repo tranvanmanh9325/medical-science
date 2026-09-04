@@ -70,13 +70,19 @@ def pull_git_latest():
         pass
 
 
-def git_commit_and_push(file_rel_path, message):
-    '''Commits and pushes a checkpoint file to GitHub repository with robust conflict resolution'''
+def git_commit_and_push(file_paths, message):
+    '''Commits and pushes files to GitHub repository with robust conflict resolution'''
     try:
-        abs_path = os.path.join(ROOT, file_rel_path)
-        if not os.path.exists(abs_path) or os.path.getsize(abs_path) < 100_000:
+        if isinstance(file_paths, str):
+            file_paths = [file_paths]
+        valid_paths = []
+        for p in file_paths:
+            abs_path = os.path.join(ROOT, p)
+            if os.path.exists(abs_path):
+                valid_paths.append(p)
+                subprocess.run(["git", "add", "-f", p], cwd=ROOT, check=True, capture_output=True)
+        if not valid_paths:
             return
-        subprocess.run(["git", "add", file_rel_path], cwd=ROOT, check=True, capture_output=True)
         res = subprocess.run(["git", "commit", "-m", f"{message} [skip ci]"], cwd=ROOT, capture_output=True, text=True)
         if "nothing to commit" not in res.stdout and "nothing to commit" not in res.stderr:
             subprocess.run(["git", "pull", "--rebase", "-Xtheirs", "origin", "main"], cwd=ROOT, capture_output=True)
@@ -84,16 +90,138 @@ def git_commit_and_push(file_rel_path, message):
             if push_res.returncode != 0:
                 subprocess.run(["git", "pull", "--rebase", "-Xtheirs", "origin", "main"], cwd=ROOT, capture_output=True)
                 subprocess.run(["git", "push", "origin", "main"], cwd=ROOT, check=True, capture_output=True)
-            print(f"[GIT PUSH OK] Đã đẩy {file_rel_path} lên GitHub: {message}", flush=True)
+            print(f"[GIT PUSH OK] Đã đẩy {len(valid_paths)} tệp lên GitHub: {message}", flush=True)
         else:
-            print(f"[GIT] Không có thay đổi mới trong {file_rel_path}.", flush=True)
+            print(f"[GIT] Không có thay đổi mới cần commit.", flush=True)
     except Exception as e:
         print(f"[GIT PUSH WARNING] Không thể đẩy lên git: {e}", flush=True)
 
 
-def sync_remote_checkpoint_rest(acc_name):
+def parse_npz_step_and_it(ckpt_bytes):
+    '''Pure Python parser for .npz checkpoint files, immune to missing numpy package'''
+    try:
+        import io, zipfile, struct
+        with zipfile.ZipFile(io.BytesIO(ckpt_bytes)) as z:
+            b_step = z.read('_step.npy')
+            step = struct.unpack('<q', b_step[-8:])[0]
+            b_it = z.read('_it.npy')
+            it = struct.unpack('<q', b_it[-8:])[0]
+            return int(it), int(step)
+    except Exception:
+        try:
+            import io, numpy as np
+            with np.load(io.BytesIO(ckpt_bytes)) as npz:
+                return int(npz['_it']), int(npz['_step'])
+        except Exception:
+            return 0, 0
+
+
+def update_checkpoint_history_files(acc_name, log_content, is_final=False):
     '''
-    Downloads the latest checkpoint from Colab directly via Google HTTP REST API (ContentsClient).
+    Parses full train.log and generates/updates:
+    1. colab_output/checkpoints_stage2/train.log (full raw log)
+    2. colab_output/checkpoints_stage2/checkpoint_history.md (Markdown table of all checkpoints)
+    3. colab_output/checkpoints_stage2/checkpoint_history.csv (CSV dataset of checkpoints)
+    '''
+    if not log_content:
+        return
+    try:
+        import re
+        os.makedirs(LOCAL_CKPT_DIR, exist_ok=True)
+        raw_log_path = os.path.join(LOCAL_CKPT_DIR, "train.log")
+        with open(raw_log_path, "w", encoding="utf-8") as f:
+            f.write(log_content)
+
+        lines = log_content.splitlines()
+        events = []
+        pattern = re.compile(r'\[(\d+)/(\d+)\]\s+steps=([\d,]+)\s+\|\s+rew=([-\d\.]+)\s+\|\s+loss=([-\d\.]+)\s+\|\s+sps=([\d,]+)\s+\|\s+push=([^\s|]+)\s+\|\s+vx_max=([-\d\.]+)\s+\|\s+t=(\d+)s(?:\s+(.*))?')
+
+        for i, l in enumerate(lines):
+            if "Backup checkpoint" in l and i > 0:
+                prev_line = lines[i-1].strip()
+                m = pattern.search(prev_line)
+                if m:
+                    it, total_it, steps, rew, loss, sps, push, vx_max, t_sec, status = m.groups()
+                    events.append({
+                        "iteration": f"{int(it):04d}/{total_it}",
+                        "steps": steps,
+                        "progress": f"{(int(it)/int(total_it))*100:.1f}%",
+                        "reward": rew,
+                        "loss": loss,
+                        "sps": sps,
+                        "push": push,
+                        "vx_max": f"{float(vx_max):.2f} m/s",
+                        "status": (status or "").strip(),
+                        "file": "apollo_stage2_v2_latest.npz"
+                    })
+
+        for l in reversed(lines[-5:]):
+            m = pattern.search(l)
+            if m:
+                it, total_it, steps, rew, loss, sps, push, vx_max, t_sec, status = m.groups()
+                it_str = f"{int(it):04d}/{total_it}"
+                if not events or events[-1]["iteration"] != it_str:
+                    events.append({
+                        "iteration": it_str,
+                        "steps": steps,
+                        "progress": f"{(int(it)/int(total_it))*100:.1f}%",
+                        "reward": rew,
+                        "loss": loss,
+                        "sps": sps,
+                        "push": push,
+                        "vx_max": f"{float(vx_max):.2f} m/s",
+                        "status": (status or "").strip(),
+                        "file": "apollo_stage2_final.npz" if is_final else "apollo_stage2_v2_latest.npz (current)"
+                    })
+                break
+
+        md_path = os.path.join(LOCAL_CKPT_DIR, "checkpoint_history.md")
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write("# Apollo Stage 2 v2 - Nhật ký Huấn luyện & Checkpoints (Checkpoint History Log)\n\n")
+            f.write(f"- **Tài khoản Colab**: `{acc_name}`\n")
+            f.write(f"- **Cập nhật lần cuối**: `{get_vn_time_str('%Y-%m-%d %H:%M:%S')} (Giờ Việt Nam)`\n")
+            status_text = "🎉 **ĐÃ HOÀN TẤT HUẤN LUYỆN 100% (150M STEPS)** 🎉" if is_final else "Đang huấn luyện tích cực trên GPU T4"
+            f.write(f"- **Trạng thái**: {status_text}\n")
+            f.write(f"- **Tổng số mốc checkpoint ghi nhận**: {len(events)}\n\n")
+            f.write("| Iteration | Tổng bước (Steps) | Tiến độ (%) | Reward | Policy Loss | Tốc độ (SPS) | Lực đẩy | Vận tốc max | Trạng thái | Tệp Checkpoint |\n")
+            f.write("| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n")
+            for ev in events:
+                f.write(f"| {ev['iteration']} | {ev['steps']} | {ev['progress']} | {ev['reward']} | {ev['loss']} | {ev['sps']} sps | {ev['push']} | {ev['vx_max']} | {ev['status']} | `{ev['file']}` |\n")
+
+        csv_path = os.path.join(LOCAL_CKPT_DIR, "checkpoint_history.csv")
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write("iteration,steps,progress_pct,reward,loss,sps,push,vx_max,status,file\n")
+            for ev in events:
+                f.write(f'"{ev["iteration"]}","{ev["steps"]}","{ev["progress"]}","{ev["reward"]}","{ev["loss"]}","{ev["sps"]}","{ev["push"]}","{ev["vx_max"]}","{ev["status"]}","{ev["file"]}"\n')
+    except Exception as e:
+        print(f"[HISTORY UPDATE WARNING] Lỗi ghi nhật ký checkpoint: {e}", flush=True)
+
+
+def sync_colab_github_token(acc_name):
+    '''
+    Ensures that /content/medical_science_repo on Colab always has a valid, fresh GITHUB_TOKEN.
+    Since GitHub Actions job tokens expire when a run ends, this dynamically injects the active
+    runner's token into Colab so internal git operations on Colab never fail with exit code 128.
+    '''
+    gh_token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if not gh_token:
+        return
+    code = f'''
+import os, subprocess
+repo_dir = "/content/medical_science_repo"
+if os.path.exists(repo_dir):
+    new_url = "https://x-access-token:{gh_token}@github.com/tranvanmanh9325/medical-science.git"
+    subprocess.run(["git", "remote", "set-url", "origin", new_url], cwd=repo_dir, capture_output=True)
+'''
+    try:
+        safe_colab_exec(code, timeout=20, acc_name=acc_name)
+    except Exception:
+        pass
+
+
+def sync_remote_checkpoint_rest(acc_name, log_content=None):
+    '''
+    Downloads the latest checkpoint and full train.log from Colab via Google HTTP REST API (ContentsClient).
     Bypasses Jupyter kernel and subprocess completely. Fast, robust, and handles binary data.
     If the remote checkpoint is newer than the local one, writes to disk and commits to GitHub.
     '''
@@ -102,8 +230,6 @@ def sync_remote_checkpoint_rest(acc_name):
         if not s:
             return False
         import base64
-        import io
-        import numpy as np
         contents = ContentsClient(s)
         try:
             data = contents._request("GET", "content/checkpoints/apollo_stage2_v2_latest.npz", params={"content": "1", "format": "base64"})
@@ -123,18 +249,14 @@ def sync_remote_checkpoint_rest(acc_name):
             return False
 
         local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
-
-        # Check remote step
-        with np.load(io.BytesIO(ckpt_bytes)) as r_npz:
-            remote_step = int(r_npz["_step"]) if "_step" in r_npz else 0
-            remote_it = int(r_npz["_it"]) if "_it" in r_npz else 0
+        remote_it, remote_step = parse_npz_step_and_it(ckpt_bytes)
 
         # Check local step
         local_step = -1
         if os.path.exists(local_target):
             try:
-                with np.load(local_target) as l_npz:
-                    local_step = int(l_npz["_step"]) if "_step" in l_npz else -1
+                with open(local_target, "rb") as f:
+                    _, local_step = parse_npz_step_and_it(f.read())
             except Exception:
                 pass
 
@@ -142,11 +264,30 @@ def sync_remote_checkpoint_rest(acc_name):
             os.makedirs(os.path.dirname(local_target), exist_ok=True)
             with open(local_target, "wb") as f:
                 f.write(ckpt_bytes)
+
+            # Fetch full train.log if not provided
+            if not log_content:
+                try:
+                    log_data = contents._request("GET", "content/train.log", params={"content": "1"})
+                    log_content = log_data.get("content", "")
+                except Exception:
+                    pass
+
+            # Update history files
+            update_checkpoint_history_files(acc_name, log_content)
+
             print(f"[{get_vn_time_str()} | {acc_name}] [CHECKPOINT SYNC] Đã tải checkpoint mới từ Colab: Iter {remote_it} (Step {remote_step:,})", flush=True)
-            git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz", f"chore(checkpoint): update stage 2 checkpoint [{acc_name}]")
+
+            files_to_sync = [
+                "colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz",
+                "colab_output/checkpoints_stage2/train.log",
+                "colab_output/checkpoints_stage2/checkpoint_history.md",
+                "colab_output/checkpoints_stage2/checkpoint_history.csv"
+            ]
+            git_commit_and_push(files_to_sync, f"chore(checkpoint): sync stage 2 checkpoint [acc: {acc_name} | step: {remote_step:,} | it: {remote_it}/286]")
             return True
     except Exception as e:
-        pass
+        print(f"[CHECKPOINT SYNC ERROR] {e}", flush=True)
     return False
 
 
@@ -650,6 +791,8 @@ def monitor_and_sync(acc_name):
     consecutive_log_fails = 0
     last_printed_line_idx = 0
 
+    sync_colab_github_token(acc_name)
+
     while True:
         time.sleep(60)
         cycle += 1
@@ -661,6 +804,7 @@ def monitor_and_sync(acc_name):
             state._client = None
             state._auth_provider = None
             refresh_session_proxy_token(acc_name)
+            sync_colab_github_token(acc_name)
 
         # Keep alive ping to control plane on every cycle
         if current_endpoint:
@@ -716,7 +860,7 @@ def monitor_and_sync(acc_name):
             # or immediately when a new checkpoint is written to disk
             if cycle % 5 == 0 or "Backup checkpoint" in "\n".join(raw_lines[-3:]):
                 try:
-                    sync_remote_checkpoint_rest(acc_name)
+                    sync_remote_checkpoint_rest(acc_name, log_content=log_content)
                 except Exception as e:
                     print(f"[RELAY SYNC WARNING] Lỗi đồng bộ checkpoint: {e}", flush=True)
 
@@ -734,7 +878,16 @@ def monitor_and_sync(acc_name):
                         final_local = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_final.npz")
                         with open(final_local, "wb") as f:
                             f.write(base64.b64decode(raw_b64))
-                        git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_final.npz", "feat(weights): save final Apollo Stage 2 trained model (150M steps)")
+
+                    update_checkpoint_history_files(acc_name, log_content, is_final=True)
+                    files_to_sync = [
+                        "colab_output/checkpoints_stage2/apollo_stage2_final.npz",
+                        "colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz",
+                        "colab_output/checkpoints_stage2/train.log",
+                        "colab_output/checkpoints_stage2/checkpoint_history.md",
+                        "colab_output/checkpoints_stage2/checkpoint_history.csv"
+                    ]
+                    git_commit_and_push(files_to_sync, "feat(weights): save final Apollo Stage 2 trained model (150M steps) with full logs & history")
                 except Exception as e:
                     print(f"[FINAL CKPT ERROR] {e}", flush=True)
                 return "COMPLETE"

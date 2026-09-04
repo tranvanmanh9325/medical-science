@@ -14,6 +14,7 @@ training/colab_accounts/*.json
 # Jupyter & Logs
 .ipynb_checkpoints
 *.log
+!colab_output/**/*.log
 MUJOCO_LOG.TXT
 
 # Kaggle large outputs & checkpoints

@@ -33,7 +33,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install google-colab-cli "jupyter-kernel-client<1.0.0" requests google-auth
+          pip install google-colab-cli "jupyter-kernel-client<1.0.0" requests google-auth numpy
 
       - name: Configure Colab Multi-Account Pool
         env:

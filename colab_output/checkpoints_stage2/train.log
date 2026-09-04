@@ -1,0 +1,85 @@
+================================================================
+  APOLLO HUMANOID - STAGE 2: WALKING & PUSH RECOVERY (v2 Colab Max)
+  Optimized: 8,192 Envs | XLA Triton + Latency Hiding Scheduler
+================================================================
+Unpacking /content/apollo_model.zip to /content/mujoco_menagerie...
+Model unpacked successfully.
+[OK] Model found: /content/mujoco_menagerie/apptronik_apollo/scene.xml
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+JAX Backend: gpu | Devices: [CudaDevice(id=0)]
+z_nominal=1.0160m | action_scale=0.25 | step_freq=1.2Hz
+[TRANSFER LEARNING] Loading Stage 1: /content/apollo_stage1_v15_step_99876864.npz
+  [OK] Input layer: (105,512) -> (114,512)
+  [OK] Transferred 11 tensors from Stage 1
+[RESUME] Loading Stage 2 checkpoint to resume: /content/apollo_stage2_v2_latest.npz
+[RESUME SUCCESS] Resuming from iteration 96 (step 50,331,648 / 150,000,000)
+Envs=8,192 | Steps/iter=524,288 | N_iters=286 | Transfer=YES
+Velocity curriculum: [0,0.15]->[0,0.45]->[0,0.80] m/s | Checkpoints: /content/checkpoints
+================================================================
+[0097/286] steps=50,855,936 | rew=0.02491 | loss=-0.4044 | sps=2,905 | push=80N | vx_max=0.16 | t=181s *** WALKING WELL ***
+[0098/286] steps=51,380,224 | rew=0.01318 | loss=-0.4032 | sps=3,146 | push=80N | vx_max=0.16 | t=347s stepping
+[0100/286] steps=52,428,800 | rew=0.01756 | loss=-0.4034 | sps=8,200 | push=80N | vx_max=0.17 | t=474s *** WALKING ***
+[0102/286] steps=53,477,376 | rew=0.02042 | loss=-0.4038 | sps=8,197 | push=80N | vx_max=0.18 | t=605s *** WALKING ***
+[0104/286] steps=54,525,952 | rew=0.01930 | loss=-0.4036 | sps=8,174 | push=80N | vx_max=0.19 | t=733s *** WALKING ***
+[0106/286] steps=55,574,528 | rew=0.01644 | loss=-0.4055 | sps=8,206 | push=80N | vx_max=0.20 | t=861s *** WALKING ***
+[0108/286] steps=56,623,104 | rew=0.01516 | loss=-0.4064 | sps=8,203 | push=80N | vx_max=0.21 | t=989s stepping
+  -> Backup checkpoint: /content/checkpoints/apollo_stage2_v2_latest.npz (891KB)
+[0110/286] steps=57,671,680 | rew=0.01573 | loss=-0.4065 | sps=8,162 | push=80N | vx_max=0.22 | t=1117s stepping
+[0112/286] steps=58,720,256 | rew=0.01705 | loss=-0.4056 | sps=8,165 | push=80N | vx_max=0.23 | t=1246s *** WALKING ***
+[0114/286] steps=59,768,832 | rew=0.01773 | loss=-0.4057 | sps=8,199 | push=80N | vx_max=0.24 | t=1374s *** WALKING ***
+[0116/286] steps=60,817,408 | rew=0.01756 | loss=-0.4069 | sps=8,180 | push=80N | vx_max=0.25 | t=1502s *** WALKING ***
+[0118/286] steps=61,865,984 | rew=0.01687 | loss=-0.4072 | sps=8,171 | push=80N | vx_max=0.26 | t=1630s *** WALKING ***
+[0120/286] steps=62,914,560 | rew=0.01655 | loss=-0.4077 | sps=8,174 | push=80N | vx_max=0.27 | t=1758s *** WALKING ***
+  -> Backup checkpoint: /content/checkpoints/apollo_stage2_v2_latest.npz (891KB)
+[GITHUB PUSH ERROR] Failed to push to GitHub: Command '['git', 'clone', '--depth', '1', 'https://x-access-token:ghs_15368_eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhdXRobmQiLCJjdHgiOiJUZWdVOEhGZFA5WTdIR2VTaHB5SW1USTNfSV9UN3UwaXFrem5DM2hLZGFodGVTNVdXaExPeVpvIiwiZXhwIjoxNzg4NTM3NDk3LCJpYXQiOjE3ODg1MzM4OTcsImlzcyI6ImdpdGh1YiIsImp0aSI6ImE5ZGJjMWVjLTEyYTMtNGYwMS05ZGI5LTViOTUzYmFiNGM5ZCIsInZlciI6M30.zBXR8460BB-PBihoYSqt8vKrTYOl2kYNbL1iBC-Zw9Wf343KVN8-2BpkTWCkAJZelKzlqMF3lSiFF8sJxkbiuw@github.com/tranvanmanh9325/medical-science.git', '/content/medical_science_repo']' returned non-zero exit status 128.
+[0122/286] steps=63,963,136 | rew=0.01679 | loss=-0.4077 | sps=8,178 | push=80N | vx_max=0.28 | t=1988s *** WALKING ***
+[0124/286] steps=65,011,712 | rew=0.01690 | loss=-0.4078 | sps=8,164 | push=80N | vx_max=0.29 | t=2116s *** WALKING ***
+[0126/286] steps=66,060,288 | rew=0.01703 | loss=-0.4080 | sps=8,188 | push=80N | vx_max=0.30 | t=2244s *** WALKING ***
+[0128/286] steps=67,108,864 | rew=0.01695 | loss=-0.4077 | sps=8,197 | push=80N | vx_max=0.31 | t=2372s *** WALKING ***
+[0130/286] steps=68,157,440 | rew=0.01696 | loss=-0.4081 | sps=8,203 | push=80N | vx_max=0.32 | t=2500s *** WALKING ***
+[0132/286] steps=69,206,016 | rew=0.01713 | loss=-0.4087 | sps=8,207 | push=80N | vx_max=0.33 | t=2628s *** WALKING ***
+  -> Backup checkpoint: /content/checkpoints/apollo_stage2_v2_latest.npz (891KB)
+[0134/286] steps=70,254,592 | rew=0.01690 | loss=-0.4088 | sps=8,200 | push=80N | vx_max=0.34 | t=2756s *** WALKING ***
+[0136/286] steps=71,303,168 | rew=0.01689 | loss=-0.4090 | sps=8,196 | push=80N | vx_max=0.35 | t=2884s *** WALKING ***
+[0138/286] steps=72,351,744 | rew=0.01686 | loss=-0.4089 | sps=8,193 | push=80N | vx_max=0.36 | t=3012s *** WALKING ***
+[0140/286] steps=73,400,320 | rew=0.01689 | loss=-0.4092 | sps=8,179 | push=80N | vx_max=0.37 | t=3140s *** WALKING ***
+[0142/286] steps=74,448,896 | rew=0.01711 | loss=-0.4094 | sps=8,199 | push=80N | vx_max=0.38 | t=3268s *** WALKING ***
+[0144/286] steps=75,497,472 | rew=0.01696 | loss=-0.4092 | sps=8,203 | push=80N | vx_max=0.39 | t=3396s *** WALKING ***
+  -> Backup checkpoint: /content/checkpoints/apollo_stage2_v2_latest.npz (891KB)
+[GITHUB PUSH ERROR] Failed to push to GitHub: Command '['git', 'push', 'origin', 'main']' returned non-zero exit status 128.
+[0146/286] steps=76,546,048 | rew=0.01700 | loss=-0.4097 | sps=8,191 | push=80N | vx_max=0.40 | t=3526s *** WALKING ***
+[0148/286] steps=77,594,624 | rew=0.01701 | loss=-0.4099 | sps=8,207 | push=80N | vx_max=0.41 | t=3653s *** WALKING ***
+[0150/286] steps=78,643,200 | rew=0.01692 | loss=-0.4099 | sps=8,199 | push=80N | vx_max=0.42 | t=3781s *** WALKING ***
+[0152/286] steps=79,691,776 | rew=0.01708 | loss=-0.4101 | sps=8,178 | push=80N | vx_max=0.43 | t=3909s *** WALKING ***
+[0154/286] steps=80,740,352 | rew=0.01675 | loss=-0.4102 | sps=8,166 | push=80N | vx_max=0.44 | t=4038s *** WALKING ***
+[0156/286] steps=81,788,928 | rew=0.01683 | loss=-0.4105 | sps=8,157 | push=80N | vx_max=0.45 | t=4166s *** WALKING ***
+  -> Backup checkpoint: /content/checkpoints/apollo_stage2_v2_latest.npz (891KB)
+[0158/286] steps=82,837,504 | rew=0.01699 | loss=-0.4104 | sps=8,192 | push=80N | vx_max=0.45 | t=4294s *** WALKING ***
+[0160/286] steps=83,886,080 | rew=0.01712 | loss=-0.4104 | sps=8,194 | push=80N | vx_max=0.46 | t=4422s *** WALKING ***
+[0162/286] steps=84,934,656 | rew=0.01726 | loss=-0.4109 | sps=8,182 | push=80N | vx_max=0.47 | t=4550s *** WALKING ***
+[0164/286] steps=85,983,232 | rew=0.01702 | loss=-0.4110 | sps=8,179 | push=80N | vx_max=0.48 | t=4679s *** WALKING ***
+[0166/286] steps=87,031,808 | rew=0.01694 | loss=-0.4112 | sps=8,179 | push=80N | vx_max=0.49 | t=4807s *** WALKING ***
+[0168/286] steps=88,080,384 | rew=0.01684 | loss=-0.4113 | sps=8,185 | push=80N | vx_max=0.50 | t=4935s *** WALKING ***
+  -> Backup checkpoint: /content/checkpoints/apollo_stage2_v2_latest.npz (891KB)
+[GITHUB PUSH ERROR] Failed to push to GitHub: Command '['git', 'push', 'origin', 'main']' returned non-zero exit status 128.
+[0170/286] steps=89,128,960 | rew=0.01678 | loss=-0.4114 | sps=8,191 | push=80N | vx_max=0.51 | t=5064s *** WALKING ***
+[0172/286] steps=90,177,536 | rew=0.01715 | loss=-0.4115 | sps=8,192 | push=80N | vx_max=0.52 | t=5192s *** WALKING ***
+[0174/286] steps=91,226,112 | rew=0.01693 | loss=-0.4116 | sps=8,199 | push=80N | vx_max=0.53 | t=5320s *** WALKING ***
+[0176/286] steps=92,274,688 | rew=0.01701 | loss=-0.4119 | sps=8,192 | push=80N | vx_max=0.54 | t=5448s *** WALKING ***
+[0178/286] steps=93,323,264 | rew=0.01700 | loss=-0.4120 | sps=8,169 | push=80N | vx_max=0.55 | t=5576s *** WALKING ***
+[0180/286] steps=94,371,840 | rew=0.01698 | loss=-0.4122 | sps=8,173 | push=80N | vx_max=0.56 | t=5704s *** WALKING ***
+  -> Backup checkpoint: /content/checkpoints/apollo_stage2_v2_latest.npz (891KB)
+[0182/286] steps=95,420,416 | rew=0.01721 | loss=-0.4123 | sps=8,160 | push=80N | vx_max=0.57 | t=5833s *** WALKING ***
+[0184/286] steps=96,468,992 | rew=0.01694 | loss=-0.4125 | sps=8,147 | push=80N | vx_max=0.58 | t=5961s *** WALKING ***
+[0186/286] steps=97,517,568 | rew=0.01685 | loss=-0.4125 | sps=8,183 | push=80N | vx_max=0.59 | t=6090s *** WALKING ***
+[0188/286] steps=98,566,144 | rew=0.01695 | loss=-0.4125 | sps=8,186 | push=80N | vx_max=0.60 | t=6218s *** WALKING ***
+[0190/286] steps=99,614,720 | rew=0.01698 | loss=-0.4127 | sps=8,182 | push=80N | vx_max=0.61 | t=6346s *** WALKING ***
+[0192/286] steps=100,663,296 | rew=0.01732 | loss=-0.4128 | sps=8,174 | push=80N | vx_max=0.62 | t=6474s *** WALKING ***
+  -> Backup checkpoint: /content/checkpoints/apollo_stage2_v2_latest.npz (891KB)
+[GITHUB PUSH ERROR] Failed to push to GitHub: Command '['git', 'push', 'origin', 'main']' returned non-zero exit status 128.
+[0194/286] steps=101,711,872 | rew=0.01697 | loss=-0.4130 | sps=8,170 | push=80N | vx_max=0.63 | t=6604s *** WALKING ***
+[0196/286] steps=102,760,448 | rew=0.01695 | loss=-0.4131 | sps=8,179 | push=80N | vx_max=0.64 | t=6733s *** WALKING ***
+[0198/286] steps=103,809,024 | rew=0.01693 | loss=-0.4132 | sps=8,171 | push=80N | vx_max=0.65 | t=6861s *** WALKING ***
+[0200/286] steps=104,857,600 | rew=0.01689 | loss=-0.4132 | sps=8,179 | push=80N | vx_max=0.66 | t=6989s *** WALKING ***
+[0202/286] steps=105,906,176 | rew=0.01722 | loss=-0.4132 | sps=8,182 | push=80N | vx_max=0.67 | t=7117s *** WALKING ***
