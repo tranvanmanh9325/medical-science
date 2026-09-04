@@ -25,24 +25,29 @@ jobs:
           pip install --upgrade pip
           pip install google-colab-cli requests
 
-      - name: Configure Colab Credentials
+      - name: Configure Colab Multi-Account Pool
         env:
-          COLAB_TOKEN_JSON: ${{ secrets.COLAB_TOKEN_JSON }}
+          COLAB_ACCOUNTS_JSON: ${{ secrets.COLAB_ACCOUNTS_JSON }}
           COLAB_SESSIONS_JSON: ${{ secrets.COLAB_SESSIONS_JSON }}
         run: |
           mkdir -p ~/.config/colab-cli
-          echo "$COLAB_TOKEN_JSON" > ~/.config/colab-cli/token.json
+          mkdir -p training/colab_accounts
+          python -c "
+          import os, json
+          data = json.loads(os.environ.get('COLAB_ACCOUNTS_JSON', '{}'))
+          for name, content in data.items():
+              with open(f'training/colab_accounts/{name}.json', 'w') as f:
+                  json.dump(content, f)
+          print(f'Restored {len(data)} accounts in pool.')
+          "
+          # Set default active account to account_2
+          if [ -f training/colab_accounts/account_2.json ]; then
+            cp training/colab_accounts/account_2.json ~/.config/colab-cli/token.json
+          fi
           echo "$COLAB_SESSIONS_JSON" > ~/.config/colab-cli/sessions.json
-          chmod 600 ~/.config/colab-cli/token.json ~/.config/colab-cli/sessions.json
+          chmod 600 ~/.config/colab-cli/*.json || true
 
-      - name: Run Cloud Keeper
+      - name: Run Multi-Account Cloud Relay
         run: |
-          python -u training/colab_keeper.py
+          python -u training/colab_relay.py
 
-      - name: Upload Final Model (if completed)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: apollo_stage2_final_model
-          path: artifacts/
-          if-no-files-found: ignore

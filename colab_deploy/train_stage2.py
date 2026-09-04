@@ -309,34 +309,6 @@ def reseed_cmd_vel(states,rng,vx_max,vy_max,yaw_max):
     def _new(r): return jax.random.uniform(r,(3,),minval=jnp.array([0.,-vy_max,-yaw_max]),maxval=jnp.array([vx_max,vy_max,yaw_max]))
     return {**states,"cmd_vel":jax.vmap(_new)(rngs)}
 
-print(f"Envs={NUM_ENVS:,} | Steps/iter={STEPS_PER_IT:,} | N_iters={N_ITERS} | Transfer={'YES' if stage1_ck else 'NO'}", flush=True)
-print(f"Velocity curriculum: [0,0.15]->[0,0.45]->[0,0.80] m/s | Checkpoints: {CKPT_DIR}", flush=True)
-print("=" * 64, flush=True)
-
-t0 = time.time()
-cur = 0
-
-for it in range(1, N_ITERS+1):
-    t1 = time.time()
-    if it % 10 == 1:
-        vx_max, vy_max, yaw_max = get_curriculum_cmd_max(cur)
-        rng, rs = jax.random.split(rng)
-        states = reseed_cmd_vel(states, rs, jnp.float32(vx_max), jnp.float32(vy_max), jnp.float32(yaw_max))
-    
-    params, opt_state, states, rng, mr, loss = ppo_iter(params, opt_state, states, rng)
-    jax.block_until_ready(params)
-    cur += STEPS_PER_IT
-    sps = STEPS_PER_IT / max(1e-5, time.time() - t1)
-    
-    # Log progress every 2 iterations (~40s) and on first iteration
-    if it % 2 == 0 or it == 1:
-        r_val = float(mr)
-        vx_max, _, _ = get_curriculum_cmd_max(cur)
-        push_frac = min(1., max(0., (cur - PUSH_START_STEP) / (PUSH_MAX_STEP - PUSH_START_STEP)))
-        push_mag = PUSH_MAX_FORCE * push_frac if cur >= PUSH_START_STEP else 0.
-        status = ("*** WALKING WELL ***" if r_val > 0.022 else "*** WALKING ***" if r_val > 0.016 else "stepping" if r_val > 0.010 else "improving" if r_val > 0.006 else "...")
-        print(f"[{it:04d}/{N_ITERS}] steps={cur:,} | rew={r_val:.5f} | loss={float(loss):.4f} | sps={sps:,.0f} | push={push_mag:.0f}N | vx_max={vx_max:.2f} | t={time.time()-t0:.0f}s {status}", flush=True)
-    
 def push_to_github(filepath, target_rel_path, message="chore: update weights"):
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     if not token:
@@ -366,23 +338,87 @@ def push_to_github(filepath, target_rel_path, message="chore: update weights"):
     except Exception as e:
         print(f"[GITHUB PUSH ERROR] Failed to push to GitHub: {e}", flush=True)
 
+# Parse resume arguments or environment variable
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume from")
+cli_args, _ = parser.parse_known_args()
+resume_file = cli_args.resume or os.environ.get("RESUME_CKPT", "")
+
+start_it = 0
+cur = 0
+
+if resume_file and os.path.exists(resume_file):
+    print(f"[RESUME] Loading Stage 2 checkpoint to resume: {resume_file}", flush=True)
+    ck_data = np.load(resume_file)
+    ck_keys = [k for k in ck_data.files if not k.startswith("_")]
+    flat_resumed = {k: jnp.array(ck_data[k]) for k in ck_keys}
+    params = ftu.unflatten_dict({tuple(k.split("/")): v for k, v in flat_resumed.items()})
+    
+    if "_it" in ck_data.files:
+        start_it = int(ck_data["_it"])
+        cur = int(ck_data["_step"])
+    else:
+        # Fallback estimation
+        import re
+        step_match = re.search(r"step_(\d+)", resume_file)
+        if step_match:
+            cur = int(step_match.group(1))
+            start_it = cur // STEPS_PER_IT
+        else:
+            cur = start_it * STEPS_PER_IT
+    print(f"[RESUME SUCCESS] Resuming from iteration {start_it} (step {cur:,} / {TOTAL_STEPS:,})", flush=True)
+
+print(f"Envs={NUM_ENVS:,} | Steps/iter={STEPS_PER_IT:,} | N_iters={N_ITERS} | Transfer={'YES' if stage1_ck else 'NO'}", flush=True)
+print(f"Velocity curriculum: [0,0.15]->[0,0.45]->[0,0.80] m/s | Checkpoints: {CKPT_DIR}", flush=True)
+print("=" * 64, flush=True)
+
+t0 = time.time()
+
+for it in range(start_it + 1, N_ITERS + 1):
+    t1 = time.time()
+    if it % 10 == 1 or it == (start_it + 1):
+        vx_max, vy_max, yaw_max = get_curriculum_cmd_max(cur)
+        rng, rs = jax.random.split(rng)
+        states = reseed_cmd_vel(states, rs, jnp.float32(vx_max), jnp.float32(vy_max), jnp.float32(yaw_max))
+    
+    params, opt_state, states, rng, mr, loss = ppo_iter(params, opt_state, states, rng)
+    jax.block_until_ready(params)
+    cur += STEPS_PER_IT
+    sps = STEPS_PER_IT / max(1e-5, time.time() - t1)
+    
+    # Log progress every 2 iterations (~40s) and on first iteration
+    if it % 2 == 0 or it == (start_it + 1):
+        r_val = float(mr)
+        vx_max, _, _ = get_curriculum_cmd_max(cur)
+        push_frac = min(1., max(0., (cur - PUSH_START_STEP) / (PUSH_MAX_STEP - PUSH_START_STEP)))
+        push_mag = PUSH_MAX_FORCE * push_frac if cur >= PUSH_START_STEP else 0.
+        status = ("*** WALKING WELL ***" if r_val > 0.022 else "*** WALKING ***" if r_val > 0.016 else "stepping" if r_val > 0.010 else "improving" if r_val > 0.006 else "...")
+        print(f"[{it:04d}/{N_ITERS}] steps={cur:,} | rew={r_val:.5f} | loss={float(loss):.4f} | sps={sps:,.0f} | push={push_mag:.0f}N | vx_max={vx_max:.2f} | t={time.time()-t0:.0f}s {status}", flush=True)
+
     # Save rotating checkpoint every 12 iters (~6.3M steps)
     if it % 12 == 0:
         ck = f"{CKPT_DIR}/apollo_stage2_v2_latest.npz"
         flat = ftu.flatten_dict(params, sep="/")
-        np.savez(ck, **{k: np.array(jax.block_until_ready(v)) for k, v in flat.items()})
+        save_dict = {k: np.array(jax.block_until_ready(v)) for k, v in flat.items()}
+        save_dict["_it"] = np.array(it)
+        save_dict["_step"] = np.array(cur)
+        np.savez(ck, **save_dict)
         sz = os.path.getsize(ck)
         if sz >= 100_000:
             print(f"  -> Backup checkpoint: {ck} ({sz//1024}KB)", flush=True)
-            # Push to GitHub every 48 iters (~25M steps)
-            if it % 48 == 0:
+            # Push to GitHub every 24 iters (~12.5M steps) for frequent failover safety
+            if it % 24 == 0:
                 push_to_github(ck, "colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz", f"chore: checkpoint step {cur:,}")
 
     # Final checkpoint at the end of training
     if it == N_ITERS:
         final_ck = f"{CKPT_DIR}/apollo_stage2_final.npz"
         flat = ftu.flatten_dict(params, sep="/")
-        np.savez(final_ck, **{k: np.array(jax.block_until_ready(v)) for k, v in flat.items()})
+        save_dict = {k: np.array(jax.block_until_ready(v)) for k, v in flat.items()}
+        save_dict["_it"] = np.array(it)
+        save_dict["_step"] = np.array(cur)
+        np.savez(final_ck, **save_dict)
         sz = os.path.getsize(final_ck)
         print(f"  -> FINAL MODEL SAVED: {final_ck} ({sz//1024}KB)", flush=True)
         # Push final model directly to GitHub!

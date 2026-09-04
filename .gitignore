@@ -7,7 +7,8 @@ __pycache__/
 env/
 venv/
 ENV/
-.env
+# Colab Credentials & Secrets
+training/colab_accounts/*.json
 
 # Jupyter & Logs
 .ipynb_checkpoints
