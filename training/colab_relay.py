@@ -71,7 +71,7 @@ def pull_git_latest():
 
 
 def git_commit_and_push(file_rel_path, message):
-    '''Commits and pushes a checkpoint file to GitHub repository'''
+    '''Commits and pushes a checkpoint file to GitHub repository with robust conflict resolution'''
     try:
         abs_path = os.path.join(ROOT, file_rel_path)
         if not os.path.exists(abs_path) or os.path.getsize(abs_path) < 100_000:
@@ -79,13 +79,75 @@ def git_commit_and_push(file_rel_path, message):
         subprocess.run(["git", "add", file_rel_path], cwd=ROOT, check=True, capture_output=True)
         res = subprocess.run(["git", "commit", "-m", f"{message} [skip ci]"], cwd=ROOT, capture_output=True, text=True)
         if "nothing to commit" not in res.stdout and "nothing to commit" not in res.stderr:
-            subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=ROOT, capture_output=True)
-            subprocess.run(["git", "push", "origin", "main"], cwd=ROOT, check=True, capture_output=True)
+            subprocess.run(["git", "pull", "--rebase", "-Xtheirs", "origin", "main"], cwd=ROOT, capture_output=True)
+            push_res = subprocess.run(["git", "push", "origin", "main"], cwd=ROOT, capture_output=True, text=True)
+            if push_res.returncode != 0:
+                subprocess.run(["git", "pull", "--rebase", "-Xtheirs", "origin", "main"], cwd=ROOT, capture_output=True)
+                subprocess.run(["git", "push", "origin", "main"], cwd=ROOT, check=True, capture_output=True)
             print(f"[GIT PUSH OK] Đã đẩy {file_rel_path} lên GitHub: {message}", flush=True)
         else:
             print(f"[GIT] Không có thay đổi mới trong {file_rel_path}.", flush=True)
     except Exception as e:
         print(f"[GIT PUSH WARNING] Không thể đẩy lên git: {e}", flush=True)
+
+
+def sync_remote_checkpoint_rest(acc_name):
+    '''
+    Downloads the latest checkpoint from Colab directly via Google HTTP REST API (ContentsClient).
+    Bypasses Jupyter kernel and subprocess completely. Fast, robust, and handles binary data.
+    If the remote checkpoint is newer than the local one, writes to disk and commits to GitHub.
+    '''
+    try:
+        s = state.store.get(SESSION_NAME)
+        if not s:
+            return False
+        import base64
+        import io
+        import numpy as np
+        contents = ContentsClient(s)
+        try:
+            data = contents._request("GET", "content/checkpoints/apollo_stage2_v2_latest.npz", params={"content": "1", "format": "base64"})
+        except FileNotFoundError:
+            refresh_session_proxy_token(acc_name)
+            s = state.store.get(SESSION_NAME)
+            if not s:
+                return False
+            contents = ContentsClient(s)
+            data = contents._request("GET", "content/checkpoints/apollo_stage2_v2_latest.npz", params={"content": "1", "format": "base64"})
+
+        raw_b64 = data.get("content")
+        if not raw_b64:
+            return False
+        ckpt_bytes = base64.b64decode(raw_b64)
+        if len(ckpt_bytes) < 100_000:
+            return False
+
+        local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
+
+        # Check remote step
+        with np.load(io.BytesIO(ckpt_bytes)) as r_npz:
+            remote_step = int(r_npz["_step"]) if "_step" in r_npz else 0
+            remote_it = int(r_npz["_it"]) if "_it" in r_npz else 0
+
+        # Check local step
+        local_step = -1
+        if os.path.exists(local_target):
+            try:
+                with np.load(local_target) as l_npz:
+                    local_step = int(l_npz["_step"]) if "_step" in l_npz else -1
+            except Exception:
+                pass
+
+        if remote_step > local_step:
+            os.makedirs(os.path.dirname(local_target), exist_ok=True)
+            with open(local_target, "wb") as f:
+                f.write(ckpt_bytes)
+            print(f"[{get_vn_time_str()} | {acc_name}] [CHECKPOINT SYNC] Đã tải checkpoint mới từ Colab: Iter {remote_it} (Step {remote_step:,})", flush=True)
+            git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz", f"chore(checkpoint): update stage 2 checkpoint [{acc_name}]")
+            return True
+    except Exception as e:
+        pass
+    return False
 
 
 def switch_account_and_reset(acc_name):
@@ -264,6 +326,54 @@ def ensure_session_valid(acc_name):
     return False
 
 
+def refresh_session_proxy_token(acc_name):
+    '''
+    Colab runtime proxy tokens expire after 3600 seconds.
+    Query list_assignments() to obtain a freshly minted proxy token from Google,
+    and update state.store and sessions.json so ContentsClient and colab-cli
+    can communicate indefinitely without getting 404/401 errors.
+    '''
+    try:
+        assigns = state.client.list_assignments()
+        if not assigns:
+            return False
+        for a in assigns:
+            if is_gpu_assignment(a):
+                s = state.store.get(SESSION_NAME)
+                if s:
+                    s.token = a.runtime_proxy_info.token
+                    s.url = a.runtime_proxy_info.url
+                    state.store.add(s)
+                    state._sessions = None
+                    colab_pool.save_account_sessions(acc_name)
+                    return True
+                else:
+                    adopted, _ = check_and_adopt_assignment(acc_name)
+                    return adopted
+    except Exception as e:
+        err_str = str(e)
+        if "401" in err_str or "auth" in err_str.lower():
+            colab_pool.refresh_account_token(acc_name)
+            state._client = None
+            state._auth_provider = None
+            try:
+                assigns = state.client.list_assignments()
+                for a in assigns:
+                    if is_gpu_assignment(a):
+                        s = state.store.get(SESSION_NAME)
+                        if s:
+                            s.token = a.runtime_proxy_info.token
+                            s.url = a.runtime_proxy_info.url
+                            state.store.add(s)
+                            state._sessions = None
+                            colab_pool.save_account_sessions(acc_name)
+                            return True
+            except Exception:
+                pass
+        print(f"[RELAY WARNING] Lỗi refresh proxy token trên {acc_name}: {e}", flush=True)
+    return False
+
+
 def safe_colab_exec(code, timeout=90, retries=2, acc_name=None):
     '''
     Executes Python code in the Colab session safely.
@@ -295,6 +405,7 @@ def safe_colab_exec(code, timeout=90, retries=2, acc_name=None):
                 colab_pool.refresh_account_token(acc_name)
                 state._client = None
                 state._auth_provider = None
+                refresh_session_proxy_token(acc_name)
                 ensure_session_valid(acc_name)
             if attempt < retries:
                 time.sleep(3)
@@ -342,7 +453,7 @@ def fetch_remote_train_log(acc_name=None):
     '''
     Directly fetches /content/train.log via Google Colab HTTP REST API (ContentsClient).
     Bypasses Jupyter kernel and WebSocket completely. Takes only ~0.2s and NEVER hangs.
-    If session is missing from local store, attempts automatic self-healing by re-adopting.
+    If proxy token expired (causing false 404/FileNotFoundError), automatically heals it.
     '''
     try:
         s = state.store.get(SESSION_NAME)
@@ -355,12 +466,38 @@ def fetch_remote_train_log(acc_name=None):
         data = contents._request("GET", "content/train.log", params={"content": "1"})
         return True, data.get("content", "")
     except FileNotFoundError:
+        # Proxy token might have expired (Google returns 404 which ContentsClient maps to FileNotFoundError)
+        if acc_name:
+            refreshed = refresh_session_proxy_token(acc_name)
+            if refreshed:
+                try:
+                    s = state.store.get(SESSION_NAME)
+                    contents = ContentsClient(s)
+                    data = contents._request("GET", "content/train.log", params={"content": "1"})
+                    return True, data.get("content", "")
+                except Exception:
+                    pass
         return False, "FILE_NOT_FOUND"
     except Exception as e:
         err_str = str(e)
         if "404" in err_str:
+            if acc_name:
+                refreshed = refresh_session_proxy_token(acc_name)
+                if refreshed:
+                    try:
+                        s = state.store.get(SESSION_NAME)
+                        contents = ContentsClient(s)
+                        data = contents._request("GET", "content/train.log", params={"content": "1"})
+                        return True, data.get("content", "")
+                    except Exception:
+                        pass
             return False, "FILE_NOT_FOUND"
         elif "401" in err_str or "auth" in err_str.lower() or "unauthorized" in err_str.lower():
+            if acc_name:
+                colab_pool.refresh_account_token(acc_name)
+                state._client = None
+                state._auth_provider = None
+                refresh_session_proxy_token(acc_name)
             return False, "AUTH_EXPIRED"
         return False, err_str
 
@@ -517,13 +654,13 @@ def monitor_and_sync(acc_name):
         time.sleep(60)
         cycle += 1
 
-        # Proactive OAuth token refresh every 15 minutes (900 seconds)
-        if cycle % 15 == 0:
-            print(f"[{get_vn_time_str()} | {acc_name}] [PROACTIVE AUTH] Tự động gia hạn OAuth token...", flush=True)
+        # Proactive OAuth & Proxy token refresh every 10 minutes (600 seconds)
+        if cycle % 10 == 0:
+            print(f"[{get_vn_time_str()} | {acc_name}] [PROACTIVE AUTH] Tự động gia hạn OAuth token và Proxy token...", flush=True)
             colab_pool.refresh_account_token(acc_name)
-            colab_pool.save_account_sessions(acc_name)
             state._client = None
             state._auth_provider = None
+            refresh_session_proxy_token(acc_name)
 
         # Keep alive ping to control plane on every cycle
         if current_endpoint:
@@ -540,10 +677,7 @@ def monitor_and_sync(acc_name):
             if api_dead_count >= 3:
                 print(f"\n[RELAY FAILOVER] Google đã chính thức thu hồi máy ảo trên {acc_name} (Hết hạn mức hoặc phiên bị ngắt)!")
                 try:
-                    ensure_session_valid(acc_name)
-                    local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
-                    subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_v2_latest.npz", local_target], capture_output=True, timeout=20)
-                    git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz", f"chore(checkpoint): backup before failover from {acc_name}")
+                    sync_remote_checkpoint_rest(acc_name)
                 except Exception:
                     pass
                 colab_pool.mark_account_exhausted(acc_name, hours=12)
@@ -579,15 +713,10 @@ def monitor_and_sync(acc_name):
                 last_progress_time = time.time()
 
             # Periodically download latest checkpoint and commit to git every 5 minutes (~5 iters)
-            if cycle % 5 == 0:
+            # or immediately when a new checkpoint is written to disk
+            if cycle % 5 == 0 or "Backup checkpoint" in "\n".join(raw_lines[-3:]):
                 try:
-                    ensure_session_valid(acc_name)
-                    local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
-                    dl = subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_v2_latest.npz", local_target], capture_output=True, text=True)
-                    if dl.returncode != 0:
-                        dl = subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/apollo_stage2_v2_latest.npz", local_target], capture_output=True, text=True)
-                    if dl.returncode == 0 and os.path.exists(local_target) and os.path.getsize(local_target) > 100_000:
-                        git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz", f"chore(checkpoint): update stage 2 checkpoint [{acc_name}]")
+                    sync_remote_checkpoint_rest(acc_name)
                 except Exception as e:
                     print(f"[RELAY SYNC WARNING] Lỗi đồng bộ checkpoint: {e}", flush=True)
 
@@ -595,10 +724,19 @@ def monitor_and_sync(acc_name):
                 print("\n" + "=" * 64)
                 print("  🎉🎉🎉 HUẤN LUYỆN HOÀN TẤT 100%! CÁN ĐÍCH 150M BƯỚC! 🎉🎉🎉")
                 print("=" * 64, flush=True)
-                final_local = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_final.npz")
-                ensure_session_valid(acc_name)
-                subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_final.npz", final_local])
-                git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_final.npz", "feat(weights): save final Apollo Stage 2 trained model (150M steps)")
+                try:
+                    s = state.store.get(SESSION_NAME)
+                    contents = ContentsClient(s)
+                    data = contents._request("GET", "content/checkpoints/apollo_stage2_final.npz", params={"content": "1", "format": "base64"})
+                    raw_b64 = data.get("content")
+                    if raw_b64:
+                        import base64
+                        final_local = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_final.npz")
+                        with open(final_local, "wb") as f:
+                            f.write(base64.b64decode(raw_b64))
+                        git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_final.npz", "feat(weights): save final Apollo Stage 2 trained model (150M steps)")
+                except Exception as e:
+                    print(f"[FINAL CKPT ERROR] {e}", flush=True)
                 return "COMPLETE"
         elif log_content == "AUTH_EXPIRED":
             consecutive_log_fails += 1
@@ -626,16 +764,24 @@ def monitor_and_sync(acc_name):
             continue
         elif log_content == "FILE_NOT_FOUND":
             elapsed_from_start = time.time() - launch_time
-            if elapsed_from_start < 180:
-                print(f"[{get_vn_time_str()} | {acc_name}] [INIT] Đang khởi tạo mô hình / JIT compile JAX trên GPU ({int(elapsed_from_start)}s)...", flush=True)
+            if last_printed_line_idx > 0 or elapsed_from_start >= 180:
+                consecutive_log_fails += 1
+                print(f"[{get_vn_time_str()} | {acc_name}] [CẢNH BÁO] train.log không thể truy cập (#{consecutive_log_fails}/5)! Đang làm mới kết nối...", flush=True)
+                refresh_session_proxy_token(acc_name)
+                if consecutive_log_fails >= 5:
+                    if not check_is_training_running(acc_name):
+                        print(f"[{get_vn_time_str()} | {acc_name}] [WARNING] Tiến trình train đã dừng trên máy ảo! Tự động khởi động lại...", flush=True)
+                        restarted = deploy_and_start_training(acc_name, is_new=False)
+                        if not restarted:
+                            print(f"[{get_vn_time_str()} | {acc_name}] [RELAY FAILOVER] Không thể khởi động lại trên {acc_name}, chuyển sang tài khoản kế tiếp!")
+                            colab_pool.mark_account_exhausted(acc_name, hours=12)
+                            return "FAILOVER"
+                        last_progress_time = time.time()
+                        launch_time = time.time()
+                        last_printed_line_idx = 0
+                        consecutive_log_fails = 0
             else:
-                print(f"[{get_vn_time_str()} | {acc_name}] [CẢNH BÁO] train.log chưa xuất hiện sau {int(elapsed_from_start)}s! Kiểm tra trạng thái tiến trình...", flush=True)
-                if not check_is_training_running(acc_name):
-                    print(f"[{get_vn_time_str()} | {acc_name}] [WARNING] Tiến trình train đã dừng trên máy ảo! Tự động khởi động lại...", flush=True)
-                    deploy_and_start_training(acc_name, is_new=False)
-                    last_progress_time = time.time()
-                    launch_time = time.time()
-                    last_printed_line_idx = 0
+                print(f"[{get_vn_time_str()} | {acc_name}] [INIT] Đang khởi tạo mô hình / JIT compile JAX trên GPU ({int(elapsed_from_start)}s)...", flush=True)
         else:
             consecutive_log_fails += 1
             print(f"[{get_vn_time_str()} | {acc_name}] [LOG REST WARNING] Không thể đọc log qua HTTP API (#{consecutive_log_fails}/5): {log_content}", flush=True)
@@ -651,10 +797,15 @@ def monitor_and_sync(acc_name):
             print(f"[{get_vn_time_str()} | {acc_name}] [HEALTH CHECK] Log chưa cập nhật sau 10 phút, kiểm tra tiến trình python...", flush=True)
             if not check_is_training_running(acc_name):
                 print(f"[{get_vn_time_str()} | {acc_name}] [WARNING] Tiến trình train đã dừng trên máy ảo! Tự động khởi động lại từ checkpoint gần nhất...", flush=True)
-                deploy_and_start_training(acc_name, is_new=False)
+                restarted = deploy_and_start_training(acc_name, is_new=False)
+                if not restarted:
+                    print(f"[{get_vn_time_str()} | {acc_name}] [RELAY FAILOVER] Không thể khởi động lại trên {acc_name}, chuyển sang tài khoản kế tiếp!")
+                    colab_pool.mark_account_exhausted(acc_name, hours=12)
+                    return "FAILOVER"
                 last_progress_time = time.time()
                 launch_time = time.time()
                 last_printed_line_idx = 0
+                consecutive_log_fails = 0
             else:
                 last_progress_time = time.time()  # Process is running, reset timer
 

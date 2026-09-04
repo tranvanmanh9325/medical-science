@@ -317,13 +317,26 @@ def push_to_github(filepath, target_rel_path, message="chore: update weights"):
     try:
         import subprocess, shutil
         repo_dir = "/content/medical_science_repo"
-        if not os.path.exists(repo_dir):
-            clone_url = f"https://x-access-token:{token}@github.com/tranvanmanh9325/medical-science.git"
+        clone_url = f"https://x-access-token:{token}@github.com/tranvanmanh9325/medical-science.git"
+
+        # Check if repo exists and is valid
+        if not os.path.exists(os.path.join(repo_dir, ".git")):
+            shutil.rmtree(repo_dir, ignore_errors=True)
             subprocess.run(["git", "clone", "--depth", "1", clone_url, repo_dir], check=True, capture_output=True)
             subprocess.run(["git", "config", "user.name", "Apollo Cloud Trainer"], cwd=repo_dir, check=True)
             subprocess.run(["git", "config", "user.email", "trainer@medical-science.local"], cwd=repo_dir, check=True)
         else:
-            subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=repo_dir, capture_output=True)
+            # Self-healing: clean up any conflicted or dirty rebase state
+            subprocess.run(["git", "rebase", "--abort"], cwd=repo_dir, capture_output=True)
+            subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=repo_dir, capture_output=True)
+            subprocess.run(["git", "clean", "-fd"], cwd=repo_dir, capture_output=True)
+            pull_res = subprocess.run(["git", "pull", "--rebase", "-Xtheirs", "origin", "main"], cwd=repo_dir, capture_output=True)
+            if pull_res.returncode != 0:
+                # Corrupted shallow repo: wipe and re-clone fresh in 2 seconds
+                shutil.rmtree(repo_dir, ignore_errors=True)
+                subprocess.run(["git", "clone", "--depth", "1", clone_url, repo_dir], check=True, capture_output=True)
+                subprocess.run(["git", "config", "user.name", "Apollo Cloud Trainer"], cwd=repo_dir, check=True)
+                subprocess.run(["git", "config", "user.email", "trainer@medical-science.local"], cwd=repo_dir, check=True)
         
         dest = os.path.join(repo_dir, target_rel_path)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -331,7 +344,10 @@ def push_to_github(filepath, target_rel_path, message="chore: update weights"):
         subprocess.run(["git", "add", target_rel_path], cwd=repo_dir, check=True)
         commit_res = subprocess.run(["git", "commit", "-m", f"{message} [skip ci]"], cwd=repo_dir, capture_output=True, text=True)
         if "nothing to commit" not in commit_res.stdout:
-            subprocess.run(["git", "push", "origin", "main"], cwd=repo_dir, check=True, capture_output=True)
+            push_res = subprocess.run(["git", "push", "origin", "main"], cwd=repo_dir, capture_output=True, text=True)
+            if push_res.returncode != 0:
+                subprocess.run(["git", "pull", "--rebase", "-Xtheirs", "origin", "main"], cwd=repo_dir, capture_output=True)
+                subprocess.run(["git", "push", "origin", "main"], cwd=repo_dir, check=True, capture_output=True)
             print(f"[GITHUB PUSH] Successfully pushed {target_rel_path} to GitHub!", flush=True)
         else:
             print(f"[GITHUB PUSH] File {target_rel_path} already up to date.", flush=True)
