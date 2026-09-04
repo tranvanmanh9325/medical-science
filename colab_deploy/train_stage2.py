@@ -345,6 +345,15 @@ parser.add_argument("--resume", type=str, default="", help="Path to checkpoint t
 cli_args, _ = parser.parse_known_args()
 resume_file = cli_args.resume or os.environ.get("RESUME_CKPT", "")
 
+if not resume_file or not os.path.exists(resume_file):
+    for candidate in [
+        "/content/apollo_stage2_v2_latest.npz",
+        "/content/checkpoints/apollo_stage2_v2_latest.npz",
+    ]:
+        if os.path.exists(candidate):
+            resume_file = candidate
+            break
+
 start_it = 0
 cur = 0
 

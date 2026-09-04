@@ -76,6 +76,34 @@ def switch_account_and_reset(acc_name):
     state._sessions = None
 
 
+def safe_colab_exec(code, timeout=40, retries=2):
+    '''
+    Executes Python code in the Colab session safely.
+    Suppresses stderr tracebacks from leaking into CI/CD logs and retries on transient connection issues.
+    '''
+    last_err = ""
+    for attempt in range(retries + 1):
+        try:
+            p = subprocess.Popen(
+                ["colab", "exec", "-s", SESSION_NAME],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            out, err = p.communicate(input=code, timeout=timeout)
+            if p.returncode == 0:
+                return True, out
+            last_err = err or out
+            if attempt < retries:
+                time.sleep(3)
+        except Exception as e:
+            last_err = str(e)
+            if attempt < retries:
+                time.sleep(3)
+    return False, last_err
+
+
 def check_is_training_running():
     '''Checks whether train_stage2.py is actively running in the Colab session'''
     check_code = '''
@@ -86,12 +114,8 @@ try:
 except Exception:
     print("NOT_RUNNING")
 '''
-    try:
-        p = subprocess.Popen(["colab", "exec", "-s", SESSION_NAME], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        out, _ = p.communicate(input=check_code, timeout=35)
-        return "RUNNING" in out
-    except Exception:
-        return False
+    ok, out = safe_colab_exec(check_code, timeout=30, retries=1)
+    return ok and "RUNNING" in out
 
 
 def check_and_adopt_assignment(acc_name):
@@ -135,7 +159,7 @@ def deploy_and_start_training(acc_name, is_new=True):
         res = subprocess.run(["colab", "new", "-s", SESSION_NAME, "--gpu", "T4"], capture_output=True, text=True)
         err = res.stderr or res.stdout
         if "Session READY" not in res.stdout and "READY" not in res.stdout:
-            print(f"[RELAY WARNING] Cấp phát GPU thất bại trên {acc_name}: {err.strip()[:250]}")
+            print(f"[RELAY WARNING] Cấp phát GPU thất bại trên {acc_name}: {err.strip()[:200]}")
             if "TooManyAssignmentsError" in err or "412" in err:
                 print(f"[RELAY] Tài khoản đã có máy ảo cấp phát từ trước, chuyển sang nhận diện phiên...", flush=True)
                 has_vm, is_running = check_and_adopt_assignment(acc_name)
@@ -166,9 +190,8 @@ except Exception:
     subprocess.check_output('pip install -q mujoco mujoco-mjx optax flax==0.11.2', shell=True, text=True)
     print("INSTALL_OK")
 '''
-    p = subprocess.Popen(["colab", "exec", "-s", SESSION_NAME], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    out, _ = p.communicate(input=setup_code, timeout=180)
-    if "ALL_INSTALLED" not in out and "INSTALL_OK" not in out:
+    ok, out = safe_colab_exec(setup_code, timeout=180, retries=2)
+    if not ok or ("ALL_INSTALLED" not in out and "INSTALL_OK" not in out):
         print("[RELAY WARNING] Cài đặt thư viện có cảnh báo, tiếp tục kiểm tra...")
 
     # 2. Upload assets
@@ -181,16 +204,14 @@ except Exception:
     subprocess.run(["colab", "upload", "-s", SESSION_NAME, stage1_npz, "/content/apollo_stage1_v15_step_99876864.npz"], capture_output=True)
     subprocess.run(["colab", "upload", "-s", SESSION_NAME, train_script, "/content/train_stage2.py"], capture_output=True)
 
-    # 3. Resume Checkpoint Check
+    # 3. Resume Checkpoint Check — Upload directly to /content/ which always exists
     pull_git_latest()
     latest_ck = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
+    resume_flag = ""
     if os.path.exists(latest_ck):
         print(f"[RELAY RESUME] Tìm thấy checkpoint trước đó: {latest_ck}", flush=True)
-        mkdir_code = "import os\nos.makedirs('/content/checkpoints', exist_ok=True)\n"
-        mk = subprocess.Popen(["colab", "exec", "-s", SESSION_NAME], stdin=subprocess.PIPE, text=True)
-        mk.communicate(input=mkdir_code)
-        subprocess.run(["colab", "upload", "-s", SESSION_NAME, latest_ck, "/content/checkpoints/apollo_stage2_v2_latest.npz"], capture_output=True)
-        resume_flag = "--resume /content/checkpoints/apollo_stage2_v2_latest.npz"
+        subprocess.run(["colab", "upload", "-s", SESSION_NAME, latest_ck, "/content/apollo_stage2_v2_latest.npz"], capture_output=True)
+        resume_flag = "--resume /content/apollo_stage2_v2_latest.npz"
 
     # 4. Launch training daemon
     gh_token = get_github_token()
@@ -201,8 +222,7 @@ cmd = 'GITHUB_TOKEN={gh_token} nohup python3 -u /content/train_stage2.py {resume
 subprocess.Popen(cmd, shell=True)
 print('LAUNCHED')
 '''
-    p = subprocess.Popen(["colab", "exec", "-s", SESSION_NAME], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    out, _ = p.communicate(input=launch_code, timeout=35)
+    ok, out = safe_colab_exec(launch_code, timeout=35, retries=2)
     print(f"[RELAY] Huấn luyện đã kích hoạt thành công trên {acc_name}!\n", flush=True)
     return True
 
@@ -223,13 +243,9 @@ try:
 except Exception as e:
     print('LOG_ERR:' + str(e))
 '''
-        try:
-            p = subprocess.Popen(["colab", "exec", "-s", SESSION_NAME], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            out, _ = p.communicate(input=check_code, timeout=25)
-        except Exception:
-            out = ""
+        ok, out = safe_colab_exec(check_code, timeout=25, retries=1)
 
-        if "LOG_TAIL:" in out:
+        if ok and "LOG_TAIL:" in out:
             fail_count = 0
             log_line = ""
             for line in out.splitlines():
@@ -241,7 +257,10 @@ except Exception as e:
             if cycle % 5 == 0:
                 try:
                     local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
+                    # Try downloading from /content/checkpoints/ first, then fallback to /content/
                     dl = subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_v2_latest.npz", local_target], capture_output=True, text=True)
+                    if dl.returncode != 0:
+                        dl = subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/apollo_stage2_v2_latest.npz", local_target], capture_output=True, text=True)
                     if dl.returncode == 0 and os.path.exists(local_target):
                         git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz", f"chore(checkpoint): update stage 2 checkpoint [{acc_name}]")
                 except Exception as e:
