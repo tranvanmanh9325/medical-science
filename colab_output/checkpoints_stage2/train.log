@@ -155,3 +155,16 @@ Velocity curriculum: [0,0.15]->[0,0.45]->[0,0.80] m/s | Checkpoints: /content/ch
 [0274/286] steps=143,654,912 | rew=0.01710 | loss=-0.4180 | sps=7,919 | push=80N | vx_max=0.80 | t=4213s *** WALKING ***
 [0275/286] steps=144,179,200 | rew=0.01712 | loss=-0.4180 | sps=7,922 | push=80N | vx_max=0.80 | t=4279s *** WALKING ***
 [0276/286] steps=144,703,488 | rew=0.01708 | loss=-0.4184 | sps=7,918 | push=80N | vx_max=0.80 | t=4346s *** WALKING ***
+[0277/286] steps=145,227,776 | rew=0.01703 | loss=-0.4185 | sps=7,922 | push=80N | vx_max=0.80 | t=4412s *** WALKING ***
+[0278/286] steps=145,752,064 | rew=0.01706 | loss=-0.4186 | sps=7,919 | push=80N | vx_max=0.80 | t=4478s *** WALKING ***
+[0279/286] steps=146,276,352 | rew=0.01702 | loss=-0.4186 | sps=7,927 | push=80N | vx_max=0.80 | t=4544s *** WALKING ***
+[0280/286] steps=146,800,640 | rew=0.01701 | loss=-0.4185 | sps=7,923 | push=80N | vx_max=0.80 | t=4610s *** WALKING ***
+[0281/286] steps=147,324,928 | rew=0.01728 | loss=-0.4178 | sps=7,925 | push=80N | vx_max=0.80 | t=4677s *** WALKING ***
+[0282/286] steps=147,849,216 | rew=0.01747 | loss=-0.4183 | sps=7,932 | push=80N | vx_max=0.80 | t=4743s *** WALKING ***
+[0283/286] steps=148,373,504 | rew=0.01722 | loss=-0.4184 | sps=7,922 | push=80N | vx_max=0.80 | t=4809s *** WALKING ***
+[0284/286] steps=148,897,792 | rew=0.01694 | loss=-0.4187 | sps=7,929 | push=80N | vx_max=0.80 | t=4875s *** WALKING ***
+[0285/286] steps=149,422,080 | rew=0.01729 | loss=-0.4189 | sps=7,923 | push=80N | vx_max=0.80 | t=4941s *** WALKING ***
+[0286/286] steps=149,946,368 | rew=0.01705 | loss=-0.4193 | sps=7,921 | push=80N | vx_max=0.80 | t=5007s *** WALKING ***
+-> FINAL MODEL SAVED: /content/checkpoints/apollo_stage2_final.npz (891KB)
+[GITHUB PUSH] Successfully pushed colab_output/checkpoints_stage2/apollo_stage2_final.npz to GitHub!
+STAGE 2 v2 TRAINING COMPLETE!
