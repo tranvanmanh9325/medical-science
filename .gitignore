@@ -9,6 +9,7 @@ venv/
 ENV/
 # Colab Credentials & Secrets
 training/colab_accounts/*.json
+!training/colab_accounts/pool_status.json
 
 # Jupyter & Logs
 .ipynb_checkpoints

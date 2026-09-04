@@ -1,0 +1,12 @@
+{
+  "account_1": {
+    "cooldown_until": 1788554313.388948,
+    "exhausted_at": "2026-09-04 15:38:33",
+    "reason": "GPU Quota Limit (503 / outcome: 2)"
+  },
+  "account_2": {
+    "cooldown_until": 1788556504.0431905,
+    "exhausted_at": "2026-09-04 16:15:04",
+    "reason": "GPU Quota Limit (503 / outcome: 2)"
+  }
+}

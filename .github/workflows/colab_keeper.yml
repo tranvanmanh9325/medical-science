@@ -5,15 +5,21 @@ on:
   push:
     paths:
       - '.github/workflows/colab_keeper.yml'
+      - 'training/colab_relay.py'
 
 jobs:
   keep-alive:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -40,14 +46,21 @@ jobs:
                   json.dump(content, f)
           print(f'Restored {len(data)} accounts in pool.')
           "
-          # Set default active account to account_2
-          if [ -f training/colab_accounts/account_2.json ]; then
+          # Set default active account to account_3 if available, else account_2
+          if [ -f training/colab_accounts/account_3.json ]; then
+            cp training/colab_accounts/account_3.json ~/.config/colab-cli/token.json
+          elif [ -f training/colab_accounts/account_2.json ]; then
             cp training/colab_accounts/account_2.json ~/.config/colab-cli/token.json
           fi
-          echo "$COLAB_SESSIONS_JSON" > ~/.config/colab-cli/sessions.json
+          if [ -n "$COLAB_SESSIONS_JSON" ] && [ "$COLAB_SESSIONS_JSON" != "{}" ]; then
+            echo "$COLAB_SESSIONS_JSON" > ~/.config/colab-cli/sessions.json
+          fi
           chmod 600 ~/.config/colab-cli/*.json || true
 
       - name: Run Multi-Account Cloud Relay
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          git config --global user.name "Apollo Cloud Relay"
+          git config --global user.email "relay@medical-science.local"
           python -u training/colab_relay.py
-

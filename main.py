@@ -200,6 +200,89 @@ class PPOPolicy:
 
 
 # ==============================================================================
+# 0b. PPO POLICY STAGE 2 — ĐI BỘ (114-DIM OBS: +VEL CMD + GAIT CLOCK + CONTACT)
+# ==============================================================================
+class PPOPolicyStage2(PPOPolicy):
+    """
+    Policy Stage 2: Walking & Push Recovery.
+    Obs = 114 dims = Stage1(105) + cmd_vel(3) + gait_phase(4) + foot_contact(2)
+
+    Cải tiến so với Stage 1:
+      - Nhận lệnh vận tốc [vx, vy, yaw_rate] từ người dùng (phím WASD/QE)
+      - Tín hiệu đồng hồ pha CPG [sin_L, cos_L, sin_R, cos_R] → bước chân nhịp nhàng
+      - Phát hiện tiếp xúc chân qua độ cao site (không cần touch sensor trong XML)
+      - Action scale 0.25 (lớn hơn Stage 1's 0.1 để vung chân đủ biên độ)
+    """
+
+    OBS_DIM_S2    = 114    # 105 (Stage 1) + 9 mới
+    STEP_FREQ     = 1.2    # Hz — tần số bước chân 1.2 bước/giây, tự nhiên với 73kg
+    CONTACT_Z_THR = 0.08   # m — ngưỡng chiều cao site xác định tiếp xúc sàn
+    CTRL_DT       = 0.01   # s = 0.002s * 5 substeps (khớp với training)
+
+    def __init__(self, checkpoint_path: str, mj_model, nu: int):
+        super().__init__(checkpoint_path, mj_model, nu)
+        self.action_scale = 0.25   # Override Stage 1's 0.1
+
+        # Velocity command: người dùng điều khiển qua phím WASD/QE
+        self.cmd_vel = np.zeros(3)  # [vx m/s, vy m/s, yaw_rate rad/s]
+
+        # Gait phase clock (CPG) — cập nhật mỗi step
+        self.phase = 0.0
+
+        # Foot site IDs để đọc vị trí bàn chân trong không gian world
+        self.l_foot_site_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, "l_foot_fl")
+        self.r_foot_site_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, "r_foot_fl")
+
+        print(f"[PPO STAGE 2] Chế độ ĐI BỘ — obs({self._obs_dim}) → action({nu})")
+        print(f"  Gait clock: {self.STEP_FREQ}Hz | Action scale: {self.action_scale}")
+        print(f"  Phím W/S=tiến/lùi | A/D=sang trái/phải | Q/E=xoay trái/phải")
+
+    def get_obs(self, data, mj_model) -> np.ndarray:
+        """114-dim observation: [base_105 | cmd_vel(3) | gait_phase(4) | foot_contact(2)]."""
+        # 105 dims từ Stage 1 (không thay đổi)
+        base_obs = super().get_obs(data, mj_model)
+
+        # Gait clock — sin/cos đảm bảo liên tục tại biên pha (0 và 1)
+        phi_l = 2.0 * math.pi * self.phase
+        phi_r = 2.0 * math.pi * ((self.phase + 0.5) % 1.0)
+        gait_phase = np.array([
+            math.sin(phi_l), math.cos(phi_l),
+            math.sin(phi_r), math.cos(phi_r),
+        ], dtype=np.float32)
+
+        # Foot contact từ độ cao site — hoàn toàn deterministic, không cần sensor XML
+        l_z = float(data.site_xpos[self.l_foot_site_id, 2])
+        r_z = float(data.site_xpos[self.r_foot_site_id, 2])
+        foot_contact = np.array([
+            1.0 if l_z < self.CONTACT_Z_THR else 0.0,
+            1.0 if r_z < self.CONTACT_Z_THR else 0.0,
+        ], dtype=np.float32)
+
+        obs = np.concatenate([base_obs, self.cmd_vel.astype(np.float32), gait_phase, foot_contact])
+        return np.clip(obs, -20.0, 20.0)
+
+    def step(self, data, mj_model) -> np.ndarray:
+        """Step với cập nhật phase clock CPG."""
+        obs    = self.get_obs(data, mj_model)
+        action = self.infer(obs)
+        ctrl   = self.default_pose + action * self.action_scale
+        ctrl   = np.clip(ctrl, self.ctrl_range[:, 0], self.ctrl_range[:, 1])
+        self.prev_act = action.copy()
+        # Tiến đồng hồ pha CPG mỗi control step
+        self.phase = (self.phase + self.CTRL_DT * self.STEP_FREQ) % 1.0
+        return ctrl
+
+    def set_cmd_vel(self, vx: float = 0.0, vy: float = 0.0, yaw: float = 0.0):
+        """Đặt lệnh vận tốc từ người dùng (clip trong giới hạn an toàn)."""
+        self.cmd_vel[:] = np.clip([vx, vy, yaw], [-0.8, -0.3, -0.5], [0.8, 0.3, 0.5])
+
+    def reset(self):
+        super().reset()
+        self.phase   = 0.0
+        self.cmd_vel = np.zeros(3)
+
+
+# ==============================================================================
 # 1. SMOOTH GET-UP CONTROLLER — ĐỨNG DẬY VẬT LÝ MỀM (KHÔNG CÓ TELEPORT)
 # ==============================================================================
 class SmoothGetUpController:
@@ -784,28 +867,53 @@ class BlenderMuJoCoViewer:
         self.root_body_id = 1
         self.nominal_root_z = 1.016
 
-        # --- Tải PPO Policy từ checkpoint v15 ---
+        # --- Tải PPO Policy — Auto-detect Stage 2 (obs=114) hoặc Stage 1 (obs=105) ---
         self.policy       = None
-        self.control_mode = "PD"  # Chế độ: 'PPO' (Não AI), 'PD' (Bộ cân bằng cứng), 'RAGDOLL' (Sập nguồn rơi tự do)
+        self.control_mode = "PD"  # 'PPO', 'PD', 'RAGDOLL'
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(model_path))))
-        ck_pattern = os.path.join(
-            project_root,
-            "kaggle_output", "checkpoints_v15", "checkpoints", "*.npz"
-        )
-        ck_files = sorted(glob.glob(ck_pattern),
-                          key=lambda p: int(''.join(filter(str.isdigit, os.path.basename(p))) or '0'))
+
+        # Ưu tiên tìm Stage 2 checkpoint trước (walking), sau đó fallback Stage 1 (balance)
+        ck_search_paths = [
+            os.path.join(project_root, "kaggle_output", "checkpoints_stage2", "checkpoints", "*.npz"),
+            os.path.join(project_root, "kaggle_output", "checkpoints_v15", "checkpoints", "*.npz"),
+        ]
+        ck_files, stage2_loaded = [], False
+        for ck_pattern in ck_search_paths:
+            ck_files = sorted(glob.glob(ck_pattern),
+                              key=lambda p: int(''.join(filter(str.isdigit, os.path.basename(p))) or '0'))
+            if ck_files:
+                break
+
         if ck_files:
-            best_ck = ck_files[-1]  # checkpoint cuối = nhiều steps nhất
+            best_ck = ck_files[-1]
             try:
-                self.policy = PPOPolicy(best_ck, self.model, self.model.nu)
+                # Auto-detect Stage 2 vs Stage 1 từ obs_dim của input layer
+                probe = np.load(best_ck)
+                probe_keys = list(probe.keys())
+                w0_key = next((k for k in probe_keys if "Dense_0" in k and "kernel" in k), None)
+                is_stage2 = (w0_key is not None and probe[w0_key].shape[0] == PPOPolicyStage2.OBS_DIM_S2)
+
+                if is_stage2:
+                    self.policy = PPOPolicyStage2(best_ck, self.model, self.model.nu)
+                    stage2_loaded = True
+                    print(f"[PPO STAGE 2] Checkpoint đi bộ đã nạp thành công!")
+                    print(f"  Phím W/S: Tiến/Lùi | A/D: Sang trái/phải | Q/E: Xoay trái/phải")
+                else:
+                    self.policy = PPOPolicy(best_ck, self.model, self.model.nu)
+                    print(f"[PPO STAGE 1] Brain AI cân bằng đã nạp! Phím B: Não AI/PD")
                 self.control_mode = "PPO"
-                print(f"[PPO] Brain AI đã nạp thành công! Phím B: Não AI/PD, Phím K: Sập nguồn Ragdoll.")
             except Exception as e:
                 print(f"[PPO] Lỗi nạp checkpoint: {e}")
                 print("[PPO] Dùng PD controller dự phòng.")
         else:
-            print(f"[PPO] Không tìm thấy checkpoint tại: {ck_pattern}")
+            print(f"[PPO] Không tìm thấy checkpoint!")
             print("[PPO] Chạy: python training/download_checkpoints.py")
+
+        # Lệnh vận tốc từ người dùng (WASD) — chỉ dùng khi policy là Stage 2
+        self._walk_vx = 0.0   # m/s: W(+) / S(-)
+        self._walk_vy = 0.0   # m/s: D(+) / A(-)
+        self._walk_yaw = 0.0  # rad/s: E(+) / Q(-)
+        self._stage2_loaded = stage2_loaded
 
         # --- Khởi tạo Bộ Đứng Dậy Mượt Mà (Physics-Safe Soft Recovery) ---
         self.recovery_ctrl = SmoothGetUpController(
@@ -1202,7 +1310,67 @@ class BlenderMuJoCoViewer:
             elif key == glfw.KEY_4 and not mods:
                 self.sim_speed = 1.0
 
-            # Thử nghiệm lực đẩy xô robot
+            # ── WASD: Điều khiển lệnh vận tốc đi bộ (Stage 2) ──────────────
+            # Stage 1: Mũi tên = lực đẩy thử nghiệm | Stage 2: WASD = velocity command
+            elif key == glfw.KEY_W:
+                if self._stage2_loaded and self.control_mode == "PPO":
+                    self._walk_vx = min(self._walk_vx + 0.1, 0.8)
+                    if isinstance(self.policy, PPOPolicyStage2):
+                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f"[ĐI BỘ] Lệnh: vx={self._walk_vx:.1f}m/s, vy={self._walk_vy:.1f}m/s, yaw={self._walk_yaw:.1f}rad/s")
+                else:
+                    self.inject_perturbation(fx=150.0)
+
+            elif key == glfw.KEY_S:
+                if self._stage2_loaded and self.control_mode == "PPO":
+                    self._walk_vx = max(self._walk_vx - 0.1, -0.5)
+                    if isinstance(self.policy, PPOPolicyStage2):
+                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f"[ĐI BỘ] Lệnh: vx={self._walk_vx:.1f}m/s")
+                else:
+                    self.inject_perturbation(fx=-150.0)
+
+            elif key == glfw.KEY_A:
+                if self._stage2_loaded and self.control_mode == "PPO":
+                    self._walk_vy = max(self._walk_vy - 0.05, -0.3)
+                    if isinstance(self.policy, PPOPolicyStage2):
+                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f"[ĐI BỘ] Lệnh: vy={self._walk_vy:.2f}m/s")
+                else:
+                    self.inject_perturbation(fy=140.0)
+
+            elif key == glfw.KEY_D:
+                if self._stage2_loaded and self.control_mode == "PPO":
+                    self._walk_vy = min(self._walk_vy + 0.05, 0.3)
+                    if isinstance(self.policy, PPOPolicyStage2):
+                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f"[ĐI BỘ] Lệnh: vy={self._walk_vy:.2f}m/s")
+                else:
+                    self.inject_perturbation(fy=-140.0)
+
+            elif key == glfw.KEY_Q:
+                if self._stage2_loaded and self.control_mode == "PPO":
+                    self._walk_yaw = min(self._walk_yaw + 0.1, 0.5)
+                    if isinstance(self.policy, PPOPolicyStage2):
+                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f"[ĐI BỘ] Lệnh: yaw={self._walk_yaw:.2f}rad/s (xoay trái)")
+
+            elif key == glfw.KEY_E:
+                if self._stage2_loaded and self.control_mode == "PPO":
+                    self._walk_yaw = max(self._walk_yaw - 0.1, -0.5)
+                    if isinstance(self.policy, PPOPolicyStage2):
+                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f"[ĐI BỘ] Lệnh: yaw={self._walk_yaw:.2f}rad/s (xoay phải)")
+
+            elif key == glfw.KEY_X:
+                # Dừng ngay: reset tất cả velocity command về 0
+                if self._stage2_loaded:
+                    self._walk_vx = self._walk_vy = self._walk_yaw = 0.0
+                    if isinstance(self.policy, PPOPolicyStage2):
+                        self.policy.set_cmd_vel(0.0, 0.0, 0.0)
+                    print("[ĐI BỘ] Dừng! Lệnh vận tốc về 0.")
+
+            # Lực đẩy xô thử nghiệm — Arrow keys cho Stage 1, F cho cả 2
             elif key == glfw.KEY_LEFT:
                 self.inject_perturbation(fy=140.0)
             elif key == glfw.KEY_RIGHT:
@@ -1221,7 +1389,6 @@ class BlenderMuJoCoViewer:
 
             # Chụp ảnh báo cáo nghiên cứu
             elif key == glfw.KEY_P:
-
                 self._capture_scientific_snapshot()
 
             # Phím Numpad đổi góc nhìn chuẩn Blender
@@ -1336,15 +1503,21 @@ class BlenderMuJoCoViewer:
             badge_text = f"DANG DUNG DAY... {pct:.0f}%"
             badge_color = (255, 210, 60, 255)
         elif self.push_decay > 0.0:
-            badge_text = "DANG THU LUC DAY"
+            badge_text = "DANG THU LUC DAY XO"
             badge_color = (255, 180, 0, 255)
+        elif self.control_mode == "PPO" and self._stage2_loaded:
+            # Stage 2: hiển thị tốc độ lệnh và tốc độ thực của CoM
+            vx_actual = float(self.data.qvel[0])
+            badge_text = f"DI BO AI | Lenh:{self._walk_vx:+.1f}m/s | Thuc:{vx_actual:+.1f}m/s"
+            badge_color = (0, 255, 200, 255)
         elif self.control_mode == "PPO":
-            badge_text = "NAO AI PPO (V15 100M)"
+            badge_text = "NAO AI PPO (STAGE 1 - CAN BANG)"
             badge_color = (0, 220, 255, 255)
         else:
             badge_text = "PD CAN BANG MEM (ON DINH)"
             badge_color = (0, 255, 140, 255)
-        fr.draw_text(badge_text, rx + rw - 280, ry + 12, 'bold', 12, badge_color)
+        fr.draw_text(badge_text, rx + rw - 340, ry + 12, 'bold', 12, badge_color)
+
 
     def _draw_left_diagnostic_dashboard(self, telem):
         """Bảng chẩn đoán bên trái (100% Tiếng Việt dễ hiểu)."""
@@ -1477,19 +1650,34 @@ class BlenderMuJoCoViewer:
         gl.glVertex2f(dx + dw, dy + dh); gl.glVertex2f(dx, dy + dh)
         gl.glEnd()
 
-        mode_tag = "NÃO AI" if self.control_mode == "PPO" else ("PD CỨNG" if self.control_mode == "PD" else "SẬP NGUỒN")
-        shortcuts = [
-            ("SPACE", "Chạy/Dừng"),
-            ("B", f"Điều khiển:{mode_tag}"),
-            ("K", f"Ragdoll:{'BẬT' if self.control_mode == 'RAGDOLL' else 'TẮT'}"),
-            ("MŨI TÊN/F", "Thử Đẩy Xô"),
-            ("R", "Đặt Lại"),
-            ("TAB", "Ẩn/Hiện HUD"),
-            ("1-4", f"Tốc độ:{self.sim_speed}x"),
-            ("ESC/Q", "Thoát Ứng Dụng"),
-            ("P", "Chụp Ảnh")
-        ]
-
+        if self._stage2_loaded and self.control_mode == "PPO":
+            # Stage 2: Hiển thị lệnh vận tốc WASD hiện tại
+            mode_tag = f"ĐI BỘ AI(Vx:{self._walk_vx:+.1f} Vy:{self._walk_vy:+.2f} Yaw:{self._walk_yaw:+.1f})"
+            shortcuts = [
+                ("SPACE",   "Chạy/Dừng"),
+                ("W/S",     "Tiến/Lùi"),
+                ("A/D",     "Trái/Phải"),
+                ("Q/E",     "Xoay T/P"),
+                ("X",       "Dừng Robot"),
+                ("MŨI TÊN", "Đẩy Xô"),
+                ("K",       f"Ragdoll:{'BẬT' if self.control_mode == 'RAGDOLL' else 'TẮT'}"),
+                ("R",       "Đặt Lại"),
+                ("TAB",     "Ẩn HUD"),
+                ("ESC",     "Thoát"),
+            ]
+        else:
+            mode_tag = "NÃO AI" if self.control_mode == "PPO" else ("PD CỨNG" if self.control_mode == "PD" else "SẬP NGUỒN")
+            shortcuts = [
+                ("SPACE",     "Chạy/Dừng"),
+                ("B",         f"Điều khiển:{mode_tag}"),
+                ("K",         f"Ragdoll:{'BẬT' if self.control_mode == 'RAGDOLL' else 'TẮT'}"),
+                ("MŨI TÊN/F", "Thử Đẩy Xô"),
+                ("R",         "Đặt Lại"),
+                ("TAB",       "Ẩn/Hiện HUD"),
+                ("1-4",       f"Tốc độ:{self.sim_speed}x"),
+                ("ESC/Q",     "Thoát"),
+                ("P",         "Chụp Ảnh"),
+            ]
 
         bx = dx + 12
         for key, desc in shortcuts:

@@ -24,9 +24,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "training"))
 import colab_pool
 
+from colab_cli.common import state
+from colab_cli.state import SessionState
+
 SESSION_NAME = "stage2-train"
 LOCAL_CKPT_DIR = os.path.join(ROOT, "colab_output", "checkpoints_stage2")
 os.makedirs(LOCAL_CKPT_DIR, exist_ok=True)
+
 
 def get_github_token():
     token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -40,46 +44,134 @@ def get_github_token():
     return token
 
 
-def get_latest_checkpoint_from_git():
-    '''Syncs latest checkpoint committed to git repository'''
+def pull_git_latest():
+    '''Syncs latest commits from git repository'''
     try:
         subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=ROOT, capture_output=True)
     except Exception:
         pass
-    latest_ck = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
-    if os.path.exists(latest_ck):
-        return latest_ck
-    return None
 
 
-def deploy_and_start_training(acc_name):
-    print(f"\n[RELAY] === TRIỂN KHAI TIẾN TRÌNH TRÊN {acc_name} ===", flush=True)
+def git_commit_and_push(file_rel_path, message):
+    '''Commits and pushes a checkpoint file to GitHub repository'''
+    try:
+        abs_path = os.path.join(ROOT, file_rel_path)
+        if not os.path.exists(abs_path) or os.path.getsize(abs_path) < 100_000:
+            return
+        subprocess.run(["git", "add", file_rel_path], cwd=ROOT, check=True, capture_output=True)
+        res = subprocess.run(["git", "commit", "-m", f"{message} [skip ci]"], cwd=ROOT, capture_output=True, text=True)
+        if "nothing to commit" not in res.stdout and "nothing to commit" not in res.stderr:
+            subprocess.run(["git", "push", "origin", "main"], cwd=ROOT, check=True, capture_output=True)
+            print(f"[GIT PUSH OK] Đã đẩy {file_rel_path} lên GitHub: {message}", flush=True)
+        else:
+            print(f"[GIT] Không có thay đổi mới trong {file_rel_path}.", flush=True)
+    except Exception as e:
+        print(f"[GIT PUSH WARNING] Không thể đẩy lên git: {e}", flush=True)
+
+
+def switch_account_and_reset(acc_name):
+    '''Switches token to designated account and invalidates colab-cli cached client'''
     colab_pool.switch_to_account(acc_name)
+    state._client = None
+    state._sessions = None
 
-    # 1. Spawn session
-    print(f"[RELAY] Đang cấp phát GPU T4 mới trên {acc_name}...", flush=True)
-    res = subprocess.run(["colab", "new", "-s", SESSION_NAME, "--gpu", "T4"], capture_output=True, text=True)
-    if "Session READY" not in res.stdout and "READY" not in res.stdout:
-        print(f"[RELAY WARNING] Cấp phát GPU thất bại trên {acc_name}: {res.stderr or res.stdout}")
-        if "outcome" in res.stdout or "outcome" in res.stderr or "Service Unavailable" in res.stderr:
-            colab_pool.mark_account_exhausted(acc_name, hours=12)
+
+def check_is_training_running():
+    '''Checks whether train_stage2.py is actively running in the Colab session'''
+    check_code = '''
+import subprocess
+try:
+    out = subprocess.check_output("ps aux | grep train_stage2.py | grep -v grep || true", shell=True, text=True)
+    print("RUNNING" if "train_stage2.py" in out else "NOT_RUNNING")
+except Exception:
+    print("NOT_RUNNING")
+'''
+    try:
+        p = subprocess.Popen(["colab", "exec", "-s", SESSION_NAME], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        out, _ = p.communicate(input=check_code, timeout=35)
+        return "RUNNING" in out
+    except Exception:
         return False
 
-    print(f"[RELAY OK] Phiên '{SESSION_NAME}' đã sẵn sàng trên {acc_name}!", flush=True)
 
-    # 2. Install dependencies
-    print("[RELAY] Cài đặt thư viện (mujoco, optax, flax)...", flush=True)
+def check_and_adopt_assignment(acc_name):
+    '''
+    Checks if an active GPU assignment already exists on Colab for this account.
+    If so, adopts it into local colab-cli session state so commands can attach directly.
+    '''
+    try:
+        sessions, assignments = state.sync_sessions()
+    except Exception as e:
+        print(f"[RELAY] Lỗi đồng bộ danh sách phiên từ Colab: {e}", flush=True)
+        return False, False
+
+    if not assignments:
+        return False, False
+
+    a = assignments[0]
+    print(f"[RELAY] Phát hiện GPU VM đang hoạt động trên {acc_name}: {a.endpoint}", flush=True)
+
+    # Adopt assignment into state.store
+    s = SessionState(
+        name=SESSION_NAME,
+        token=a.runtime_proxy_info.token,
+        url=a.runtime_proxy_info.url,
+        endpoint=a.endpoint,
+        variant="GPU",
+        accelerator="T4",
+    )
+    state.store.add(s)
+    state._sessions = None
+
+    is_running = check_is_training_running()
+    return True, is_running
+
+
+def deploy_and_start_training(acc_name, is_new=True):
+    print(f"\n[RELAY] === TRIỂN KHAI TIẾN TRÌNH TRÊN {acc_name} ===", flush=True)
+
+    if is_new:
+        print(f"[RELAY] Đang cấp phát GPU T4 mới trên {acc_name}...", flush=True)
+        res = subprocess.run(["colab", "new", "-s", SESSION_NAME, "--gpu", "T4"], capture_output=True, text=True)
+        err = res.stderr or res.stdout
+        if "Session READY" not in res.stdout and "READY" not in res.stdout:
+            print(f"[RELAY WARNING] Cấp phát GPU thất bại trên {acc_name}: {err.strip()[:250]}")
+            if "TooManyAssignmentsError" in err or "412" in err:
+                print(f"[RELAY] Tài khoản đã có máy ảo cấp phát từ trước, chuyển sang nhận diện phiên...", flush=True)
+                has_vm, is_running = check_and_adopt_assignment(acc_name)
+                if has_vm:
+                    if is_running:
+                        return True
+                    is_new = False
+                else:
+                    colab_pool.mark_account_exhausted(acc_name, hours=1)
+                    return False
+            elif "outcome" in err or "Service Unavailable" in err or "ResourceExhausted" in err:
+                colab_pool.mark_account_exhausted(acc_name, hours=12)
+                return False
+            else:
+                colab_pool.mark_account_exhausted(acc_name, hours=0.25)
+                return False
+        else:
+            print(f"[RELAY OK] Phiên mới '{SESSION_NAME}' đã sẵn sàng trên {acc_name}!", flush=True)
+
+    # 1. Install dependencies if needed
+    print("[RELAY] Kiểm tra / cài đặt thư viện (mujoco, optax, flax)...", flush=True)
     setup_code = '''
 import subprocess
-subprocess.check_output('pip install -q mujoco mujoco-mjx optax flax==0.11.2', shell=True, text=True)
-print('INSTALL_OK')
+try:
+    import mujoco, optax, flax
+    print("ALL_INSTALLED")
+except Exception:
+    subprocess.check_output('pip install -q mujoco mujoco-mjx optax flax==0.11.2', shell=True, text=True)
+    print("INSTALL_OK")
 '''
     p = subprocess.Popen(["colab", "exec", "-s", SESSION_NAME], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    out, _ = p.communicate(input=setup_code)
-    if "INSTALL_OK" not in out:
+    out, _ = p.communicate(input=setup_code, timeout=180)
+    if "ALL_INSTALLED" not in out and "INSTALL_OK" not in out:
         print("[RELAY WARNING] Cài đặt thư viện có cảnh báo, tiếp tục kiểm tra...")
 
-    # 3. Upload assets
+    # 2. Upload assets
     print("[RELAY] Tải lên mô hình và mã nguồn...", flush=True)
     model_zip = os.path.join(ROOT, "colab_deploy", "apollo_model.zip")
     stage1_npz = os.path.join(ROOT, "kaggle_dataset_stage1", "apollo_stage1_v15_step_99876864.npz")
@@ -89,15 +181,18 @@ print('INSTALL_OK')
     subprocess.run(["colab", "upload", "-s", SESSION_NAME, stage1_npz, "/content/apollo_stage1_v15_step_99876864.npz"], capture_output=True)
     subprocess.run(["colab", "upload", "-s", SESSION_NAME, train_script, "/content/train_stage2.py"], capture_output=True)
 
-    # 4. Check for resume checkpoint
-    latest_ck = get_latest_checkpoint_from_git()
-    resume_flag = ""
-    if latest_ck and os.path.exists(latest_ck):
+    # 3. Resume Checkpoint Check
+    pull_git_latest()
+    latest_ck = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
+    if os.path.exists(latest_ck):
         print(f"[RELAY RESUME] Tìm thấy checkpoint trước đó: {latest_ck}", flush=True)
+        mkdir_code = "import os\nos.makedirs('/content/checkpoints', exist_ok=True)\n"
+        mk = subprocess.Popen(["colab", "exec", "-s", SESSION_NAME], stdin=subprocess.PIPE, text=True)
+        mk.communicate(input=mkdir_code)
         subprocess.run(["colab", "upload", "-s", SESSION_NAME, latest_ck, "/content/checkpoints/apollo_stage2_v2_latest.npz"], capture_output=True)
         resume_flag = "--resume /content/checkpoints/apollo_stage2_v2_latest.npz"
 
-    # 5. Launch training daemon
+    # 4. Launch training daemon
     gh_token = get_github_token()
     print(f"[RELAY LAUNCH] Khởi chạy tiến trình train ngầm (Resume: {bool(resume_flag)})...", flush=True)
     launch_code = f'''
@@ -107,14 +202,77 @@ subprocess.Popen(cmd, shell=True)
 print('LAUNCHED')
 '''
     p = subprocess.Popen(["colab", "exec", "-s", SESSION_NAME], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    out, _ = p.communicate(input=launch_code)
+    out, _ = p.communicate(input=launch_code, timeout=35)
     print(f"[RELAY] Huấn luyện đã kích hoạt thành công trên {acc_name}!\n", flush=True)
     return True
 
 
+def monitor_and_sync(acc_name):
+    print(f"[RELAY MONITOR] Bắt đầu theo dõi tiến độ trên {acc_name}...", flush=True)
+    fail_count = 0
+    cycle = 0
+
+    while True:
+        time.sleep(60)
+        cycle += 1
+        check_code = '''
+try:
+    with open('/content/train.log', 'r') as f:
+        lines = f.readlines()
+        print('LOG_TAIL:' + (lines[-1].strip() if lines else 'EMPTY'))
+except Exception as e:
+    print('LOG_ERR:' + str(e))
+'''
+        try:
+            p = subprocess.Popen(["colab", "exec", "-s", SESSION_NAME], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            out, _ = p.communicate(input=check_code, timeout=25)
+        except Exception:
+            out = ""
+
+        if "LOG_TAIL:" in out:
+            fail_count = 0
+            log_line = ""
+            for line in out.splitlines():
+                if "LOG_TAIL:" in line:
+                    log_line = line.replace("LOG_TAIL:", "").strip()
+            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] {log_line}", flush=True)
+
+            # Periodically download latest checkpoint and commit to git every 5 minutes (~5 iters)
+            if cycle % 5 == 0:
+                try:
+                    local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
+                    dl = subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_v2_latest.npz", local_target], capture_output=True, text=True)
+                    if dl.returncode == 0 and os.path.exists(local_target):
+                        git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz", f"chore(checkpoint): update stage 2 checkpoint [{acc_name}]")
+                except Exception as e:
+                    print(f"[RELAY SYNC WARNING] Lỗi đồng bộ checkpoint: {e}", flush=True)
+
+            if "STAGE 2 v2 TRAINING COMPLETE!" in out:
+                print("\n" + "=" * 64)
+                print("  🎉🎉🎉 HUẤN LUYỆN HOÀN TẤT 100%! CÁN ĐÍCH 150M BƯỚC! 🎉🎉🎉")
+                print("=" * 64, flush=True)
+                final_local = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_final.npz")
+                subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_final.npz", final_local])
+                git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_final.npz", "feat(weights): save final Apollo Stage 2 trained model (150M steps)")
+                return "COMPLETE"
+        else:
+            fail_count += 1
+            print(f"[{time.strftime('%H:%M:%S')} | {acc_name}] Cảnh báo: Mất kết nối #{fail_count}/3...", flush=True)
+            if fail_count >= 3:
+                print(f"\n[RELAY FAILOVER] Phiên trên {acc_name} đã bị ngắt hoặc chạm hạn mức!")
+                try:
+                    local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
+                    subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_v2_latest.npz", local_target], capture_output=True, timeout=15)
+                    git_commit_and_push("colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz", f"chore(checkpoint): backup before failover from {acc_name}")
+                except Exception:
+                    pass
+                colab_pool.mark_account_exhausted(acc_name, hours=12)
+                return "FAILOVER"
+
+
 def run_relay():
     print("=" * 64)
-    print("  HỆ THỐNG ĐIỀU PHỐI XOAY VÒNG TÀI KHOẢN (Colab Relay)")
+    print("  HỆ THỐNG ĐIỀU PHỐI XOAY VÒNG TÀI KHOẢN (Colab Relay Orchestrator)")
     print("=" * 64, flush=True)
 
     while True:
@@ -126,62 +284,31 @@ def run_relay():
             time.sleep(600)
             continue
 
-        # Check if session is already running on this account
-        colab_pool.switch_to_account(acc)
-        check_sess = subprocess.run(["colab", "sessions"], capture_output=True, text=True)
-        if SESSION_NAME in check_sess.stdout:
-            print(f"[RELAY] Phiên '{SESSION_NAME}' đang chạy sẵn trên {acc}, gắn trực tiếp vào giám sát!", flush=True)
+        switch_account_and_reset(acc)
+        has_assignment, is_running = check_and_adopt_assignment(acc)
+
+        if has_assignment and is_running:
+            print(f"[RELAY] Huấn luyện đang chạy sẵn trên {acc}, gắn trực tiếp vào giám sát!", flush=True)
             success = True
+        elif has_assignment and not is_running:
+            print(f"[RELAY] Máy ảo {acc} đã có sẵn nhưng tiến trình đã dừng, khởi chạy lại...", flush=True)
+            success = deploy_and_start_training(acc, is_new=False)
         else:
-            success = deploy_and_start_training(acc)
+            success = deploy_and_start_training(acc, is_new=True)
+
         if not success:
             print(f"[RELAY] Tài khoản {acc} không thể khởi động, chuyển sang tài khoản kế tiếp...")
             time.sleep(5)
             continue
 
-        # Monitoring loop for this active account
-        print(f"[RELAY MONITOR] Bắt đầu theo dõi tiến độ trên {acc}...", flush=True)
-        fail_count = 0
-
-        while True:
-            time.sleep(60)
-            check_code = '''
-try:
-    with open('/content/train.log', 'r') as f:
-        lines = f.readlines()
-        print('LOG_TAIL:' + (lines[-1].strip() if lines else 'EMPTY'))
-except Exception as e:
-    print('LOG_ERR:' + str(e))
-'''
-            try:
-                p = subprocess.Popen(["colab", "exec", "-s", SESSION_NAME], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                out, err = p.communicate(input=check_code, timeout=25)
-            except Exception as e:
-                out = ""
-
-            if "LOG_TAIL:" in out:
-                fail_count = 0
-                log_line = ""
-                for line in out.splitlines():
-                    if "LOG_TAIL:" in line:
-                        log_line = line.replace("LOG_TAIL:", "").strip()
-                print(f"[{time.strftime('%H:%M:%S')} | {acc}] {log_line}", flush=True)
-
-                if "STAGE 2 v2 TRAINING COMPLETE!" in out:
-                    print("\n" + "=" * 64)
-                    print("  🎉🎉🎉 HUẤN LUYỆN HOÀN TẤT 100%! 🎉🎉🎉")
-                    print("=" * 64, flush=True)
-                    subprocess.run(["colab", "download", "-s", SESSION_NAME, "/content/checkpoints/apollo_stage2_final.npz", os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_final.npz")])
-                    return
-            else:
-                fail_count += 1
-                print(f"[{time.strftime('%H:%M:%S')} | {acc}] Cảnh báo: Mất kết nối #{fail_count}/3...", flush=True)
-                if fail_count >= 3:
-                    print(f"\n[RELAY FAILOVER] Phiên trên {acc} đã bị ngắt hoặc chạm hạn mức!")
-                    colab_pool.mark_account_exhausted(acc, hours=12)
-                    # Pull any new checkpoint from GitHub before failover
-                    get_latest_checkpoint_from_git()
-                    break
+        res = monitor_and_sync(acc)
+        if res == "COMPLETE":
+            print("[RELAY] Hoàn tất toàn bộ nhiệm vụ!")
+            break
+        elif res == "FAILOVER":
+            print("[RELAY] Tiếp tục vòng lặp chuyển giao sang tài khoản kế tiếp...")
+            time.sleep(5)
+            continue
 
 
 if __name__ == "__main__":
