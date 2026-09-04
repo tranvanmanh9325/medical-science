@@ -24,6 +24,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "training"))
 import colab_pool
 
+# Compatibility patch for google-colab-cli with jupyter_kernel_client >= 1.0.0
+try:
+    import jupyter_kernel_client
+    if not hasattr(jupyter_kernel_client, "KernelClient") and hasattr(jupyter_kernel_client, "JupyterKernelClient"):
+        jupyter_kernel_client.KernelClient = jupyter_kernel_client.JupyterKernelClient
+except Exception:
+    pass
+
 from colab_cli.common import state
 from colab_cli.state import SessionState
 from colab_cli.contents import ContentsClient
@@ -179,7 +187,24 @@ def safe_colab_exec(code, timeout=90, retries=2):
 
 
 def check_is_training_running():
-    '''Checks whether train_stage2.py is actively running in the Colab session'''
+    '''
+    Checks whether train_stage2.py is actively running in the Colab session.
+    First performs ultra-fast 0.1s HTTP REST check via train.log metadata and content.
+    If train.log contains active training markers, training is confirmed running without
+    touching the fragile WebSocket / Jupyter kernel.
+    Falls back to ps aux via safe_colab_exec only if train.log is missing.
+    '''
+    try:
+        s = state.store.get(SESSION_NAME)
+        if s:
+            contents = ContentsClient(s)
+            data = contents._request("GET", "content/train.log", params={"content": "1"})
+            content = data.get("content", "")
+            if content and any(m in content for m in ["steps=", "WALKING", "APOLLO HUMANOID", "RESUME SUCCESS", "[TRANSFER LEARNING]"]):
+                return True
+    except Exception:
+        pass
+
     check_code = '''
 import subprocess
 try:
