@@ -83,3 +83,5 @@ Velocity curriculum: [0,0.15]->[0,0.45]->[0,0.80] m/s | Checkpoints: /content/ch
 [0198/286] steps=103,809,024 | rew=0.01693 | loss=-0.4132 | sps=8,171 | push=80N | vx_max=0.65 | t=6861s *** WALKING ***
 [0200/286] steps=104,857,600 | rew=0.01689 | loss=-0.4132 | sps=8,179 | push=80N | vx_max=0.66 | t=6989s *** WALKING ***
 [0202/286] steps=105,906,176 | rew=0.01722 | loss=-0.4132 | sps=8,182 | push=80N | vx_max=0.67 | t=7117s *** WALKING ***
+[0204/286] steps=106,954,752 | rew=0.01699 | loss=-0.4135 | sps=8,179 | push=80N | vx_max=0.68 | t=7245s *** WALKING ***
+  -> Backup checkpoint: /content/checkpoints/apollo_stage2_v2_latest.npz (891KB)
