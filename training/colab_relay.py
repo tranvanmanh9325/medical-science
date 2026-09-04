@@ -118,10 +118,9 @@ def parse_npz_step_and_it(ckpt_bytes):
 
 def update_checkpoint_history_files(acc_name, log_content, is_final=False):
     '''
-    Parses full train.log and generates/updates:
-    1. colab_output/checkpoints_stage2/train.log (full raw log)
-    2. colab_output/checkpoints_stage2/checkpoint_history.md (Markdown table of all checkpoints)
-    3. colab_output/checkpoints_stage2/checkpoint_history.csv (CSV dataset of checkpoints)
+    Cumulative Multi-Account Logger:
+    Merges log_content from the active account into the persistent cumulative master train.log.
+    Preserves all past checkpoint events across all failover accounts in checkpoint_history.md and .csv.
     '''
     if not log_content:
         return
@@ -129,16 +128,37 @@ def update_checkpoint_history_files(acc_name, log_content, is_final=False):
         import re
         os.makedirs(LOCAL_CKPT_DIR, exist_ok=True)
         raw_log_path = os.path.join(LOCAL_CKPT_DIR, "train.log")
-        with open(raw_log_path, "w", encoding="utf-8") as f:
-            f.write(log_content)
 
-        lines = log_content.splitlines()
+        # 1. Merge logs: read existing cumulative log if present
+        existing_lines = []
+        if os.path.exists(raw_log_path):
+            try:
+                with open(raw_log_path, "r", encoding="utf-8") as f:
+                    existing_lines = [l.strip() for l in f.read().splitlines() if l.strip()]
+            except Exception:
+                existing_lines = []
+
+        new_lines = [l.strip() for l in log_content.splitlines() if l.strip()]
+
+        # Combine lines without duplicates, preserving order
+        combined_lines = list(existing_lines)
+        existing_set = set(existing_lines)
+        for l in new_lines:
+            if l not in existing_set:
+                combined_lines.append(l)
+                existing_set.add(l)
+
+        # Write merged cumulative log back to train.log
+        with open(raw_log_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(combined_lines) + "\n")
+
+        # 2. Parse ALL events from the full combined_lines!
         events = []
         pattern = re.compile(r'\[(\d+)/(\d+)\]\s+steps=([\d,]+)\s+\|\s+rew=([-\d\.]+)\s+\|\s+loss=([-\d\.]+)\s+\|\s+sps=([\d,]+)\s+\|\s+push=([^\s|]+)\s+\|\s+vx_max=([-\d\.]+)\s+\|\s+t=(\d+)s(?:\s+(.*))?')
 
-        for i, l in enumerate(lines):
+        for i, l in enumerate(combined_lines):
             if "Backup checkpoint" in l and i > 0:
-                prev_line = lines[i-1].strip()
+                prev_line = combined_lines[i-1].strip()
                 m = pattern.search(prev_line)
                 if m:
                     it, total_it, steps, rew, loss, sps, push, vx_max, t_sec, status = m.groups()
@@ -155,7 +175,8 @@ def update_checkpoint_history_files(acc_name, log_content, is_final=False):
                         "file": "apollo_stage2_v2_latest.npz"
                     })
 
-        for l in reversed(lines[-5:]):
+        # Add current active status line
+        for l in reversed(combined_lines[-5:]):
             m = pattern.search(l)
             if m:
                 it, total_it, steps, rew, loss, sps, push, vx_max, t_sec, status = m.groups()
@@ -175,10 +196,17 @@ def update_checkpoint_history_files(acc_name, log_content, is_final=False):
                     })
                 break
 
+        # Deduplicate events by iteration (keeping latest)
+        unique_events = {}
+        for ev in events:
+            unique_events[ev["iteration"]] = ev
+        events = sorted(unique_events.values(), key=lambda x: x["iteration"])
+
+        # Write Markdown history table
         md_path = os.path.join(LOCAL_CKPT_DIR, "checkpoint_history.md")
         with open(md_path, "w", encoding="utf-8") as f:
             f.write("# Apollo Stage 2 v2 - Nhật ký Huấn luyện & Checkpoints (Checkpoint History Log)\n\n")
-            f.write(f"- **Tài khoản Colab**: `{acc_name}`\n")
+            f.write(f"- **Tài khoản đang chạy**: `{acc_name}`\n")
             f.write(f"- **Cập nhật lần cuối**: `{get_vn_time_str('%Y-%m-%d %H:%M:%S')} (Giờ Việt Nam)`\n")
             status_text = "🎉 **ĐÃ HOÀN TẤT HUẤN LUYỆN 100% (150M STEPS)** 🎉" if is_final else "Đang huấn luyện tích cực trên GPU T4"
             f.write(f"- **Trạng thái**: {status_text}\n")
@@ -188,6 +216,7 @@ def update_checkpoint_history_files(acc_name, log_content, is_final=False):
             for ev in events:
                 f.write(f"| {ev['iteration']} | {ev['steps']} | {ev['progress']} | {ev['reward']} | {ev['loss']} | {ev['sps']} sps | {ev['push']} | {ev['vx_max']} | {ev['status']} | `{ev['file']}` |\n")
 
+        # Write CSV dataset
         csv_path = os.path.join(LOCAL_CKPT_DIR, "checkpoint_history.csv")
         with open(csv_path, "w", encoding="utf-8") as f:
             f.write("iteration,steps,progress_pct,reward,loss,sps,push,vx_max,status,file\n")
