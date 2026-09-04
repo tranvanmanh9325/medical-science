@@ -328,7 +328,7 @@ except Exception:
     launch_code = f'''
 import subprocess
 cmd = 'GITHUB_TOKEN={gh_token} nohup python3 -u /content/train_stage2.py {resume_flag} > /content/train.log 2>&1 &'
-subprocess.Popen(cmd, shell=True)
+subprocess.Popen(cmd, shell=True, start_new_session=True)
 print('LAUNCHED_SUCCESSFULLY')
 '''
     ok, out = safe_colab_exec(launch_code, timeout=45, retries=3)
