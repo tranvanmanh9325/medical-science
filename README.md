@@ -5,11 +5,12 @@
 [![JAX / MJX](https://img.shields.io/badge/JAX%20%2F%20MJX-GPU%20Vectorized-crimson?logo=google&logoColor=white)](https://github.com/google-deepmind/mujoco)
 [![Flax / Optax](https://img.shields.io/badge/Flax-PPO%20Actor--Critic-blueviolet)](https://github.com/google/flax)
 [![Kaggle Dual T4](https://img.shields.io/badge/Kaggle-2x%20NVIDIA%20T4%20(32GB)-20BEFF?logo=kaggle&logoColor=white)](https://www.kaggle.com/)
-[![Google Colab](https://img.shields.io/badge/Google%20Colab-T4%20GPU%20Ready-F9AB00?logo=googlecolab&logoColor=white)](https://colab.research.google.com/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-
+[![Security Policy](https://img.shields.io/badge/Security-Policy%20Active-brightgreen?logo=github)](SECURITY.md)
+[![Contributing](https://img.shields.io/badge/Contributions-Welcome-blue.svg)](CONTRIBUTING.md)
 
 ---
+
 
 ## 📌 1. Project Overview & Research Mission
 
@@ -17,7 +18,8 @@
 
 The platform is anchored around the state-of-the-art **Apptronik Apollo** industrial humanoid robot model provided by the official **Google DeepMind Menagerie**, while concurrently integrating medical robotics assets from the **da Vinci Research Kit (dVRK)** for surgical biomechanics and rehabilitation research.
 
-### 🎯 Core Engineering Objectives:
+### 🎯 Core Engineering Objectives
+
 1. **High-Fidelity Dynamics & Kinematics Simulation:** Accurately simulate non-linear rigid body multi-contact dynamics across 32 degrees of freedom (DoF), an overall mass of **80.898 kg**, and peak actuator torques reaching **$\pm 494.0$ Nm** per hip joint.
 2. **Massively Vectorized GPU Reinforcement Learning (MuJoCo MJX + JAX):** Simultaneously simulate and train across **4,096 parallel environments** allocated natively inside GPU VRAM, unlocking simulation throughput exceeding **540,000+ steps per second (SPS)**.
 3. **Real-Time 3D Biomechanics Telemetry Studio:** Deliver a high-framerate, interactive diagnostic environment computing real-time 3D Center of Mass (CoM), Ground Reaction Forces (GRF), Zero Moment Point (ZMP), and dynamic Support Polygons.
@@ -79,9 +81,9 @@ Exact physical, kinematic, and dynamic parameters extracted directly from [`scen
 | **Physics Simulation Timestep ($\Delta t_{sim}$)** | **0.002** | $s$ | 500 Hz simulation rate via `mjINT_IMPLICITFAST` integrator |
 | **Control Decision Timestep ($\Delta t_{ctrl}$)** | **0.010** | $s$ | 100 Hz decision rate with $n_{substeps} = 5$ physics iterations per policy step |
 
-### 🦾 32-DoF Actuator Registry & Torque Limits:
+### 🦾 32-DoF Actuator Registry & Torque Limits
 
-```
+```text
                                 [ HEAD & NECK (3 DoF) ]
                            neck_pitch  [-0.26, 0.52] rad | ±34.2 Nm
                            neck_roll   [-0.79, 0.79] rad | ±34.2 Nm
@@ -117,7 +119,8 @@ l_ankle_ie     [-0.65, 0.31] | ±120.0 Nm                 r_ankle_ie     [-0.31,
 
 ## 🔬 4. Observation Space & Neural Architecture
 
-### 📐 105-Dimensional Observation Vector:
+### 📐 105-Dimensional Observation Vector
+
 $$\mathbf{O}_t = \left[ \mathbf{u}_z^{body}, \; \mathbf{v}_{base}, \; \boldsymbol{\omega}_{base}, \; (\mathbf{q}_{joint} - \mathbf{q}_{nominal}), \; \dot{\mathbf{q}}_{joint}, \; \mathbf{a}_{t-1} \right] \in \mathbb{R}^{105}$$
 
 - $\mathbf{u}_z^{body} \in \mathbb{R}^3$: Pelvis body Z-axis unit vector in world coordinates derived from orientation quaternion $[q_w, q_x, q_y, q_z]$:
@@ -145,14 +148,13 @@ flowchart LR
         ActHead["Dense(32) + Tanh"]
         LogStd["Trainable Param: log_std (32)"]
         CritHead["Dense(1)"]
-        
         D3 --> ActHead
         D3 --> CritHead
     end
 
     subgraph Output["Output Tensor"]
-        Act["Mean Action \mu \in [-1, 1]^{32}"]
-        Val["State Value V(s) \in \mathbb{R}"]
+        Act["Mean Action mu in [-1, 1]^32"]
+        Val["State Value V(s) in R"]
         ActHead --> Act
         CritHead --> Val
     end
@@ -180,8 +182,10 @@ Detailed breakdown of reward coefficients and physical objectives:
 | **Action Smoothness Penalty ($c_{rate}$)** | $-0.01$ | $\sum_{i=1}^{32} (a_{i,t} - a_{i,t-1})^2$ | Enforces second-order action smoothness, eliminating mechanical jitter |
 | **Joint Limit Penalty ($c_{limit}$)** | $-10.0$ | $\sum \left( [q - q_{max}]_+ + [q_{min} - q]_+ \right)$ | Strict barrier penalty preventing hard mechanical joint limit collisions |
 
-### 🛑 Early Episode Termination Criteria:
+### 🛑 Early Episode Termination Criteria
+
 An environment episode terminates immediately if either condition is satisfied:
+
 1. **Height Drop:** Pelvis height drops below $Z < 0.75 \times Z_{nominal} = 0.762\text{ m}$.
 2. **Excessive Tilt:** Body Z component drops below $u_z^{body} < 0.5$ (tilt angle $> 60^\circ$ relative to gravity).
 
@@ -231,7 +235,7 @@ sequenceDiagram
 
 The interactive visualization suite is built on **OpenGL / GLFW** with zero-dependency NumPy policy inference (requiring no JAX or CUDA runtime for local evaluation):
 
-```
+```text
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │  APOLLO SCIENTIFIC ROBOTICS TELEMETRY SUITE                              [ 3D GIZMO ]  │
 │  Pelvis Z: 1.016 m | CoM Vy: +0.002 m/s | Status: ACTIVE BALANCE                 [+Z]   │
@@ -248,7 +252,7 @@ The interactive visualization suite is built on **OpenGL / GLFW** with zero-depe
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 🎮 Complete Control Keyboard Shortcuts:
+### 🎮 Complete Control Keyboard Shortcuts
 
 | Hotkey | Functional Category | Action Description |
 | :---: | :---: | :--- |
@@ -302,47 +306,68 @@ medical-science/
 
 ## 🚀 9. Getting Started & Setup Guide
 
-### System Requirements:
+### System Requirements
+
 - **Operating System:** Windows 10/11 (64-bit) or Ubuntu 20.04/22.04 LTS.
 - **Python:** Python 3.10 through 3.14.
 - **GPU (Recommended for 3D Viewport):** NVIDIA GeForce GTX 1650 / RTX 3050 or higher (OpenGL 3.3+ support).
 
 ### Step 1: Clone the repository
+
 ```bash
 git clone https://github.com/tranvanmanh9325/medical-science.git
 cd medical-science
 ```
 
 ### Step 2: Install dependencies
+
 ```bash
 pip install -r requirements-train.txt
 ```
 
 ### Step 3: Launch the 3D Biomechanics Studio
+
 - **On Windows:** Double-click **`run.bat`** *(Automatically cleans up legacy background processes to prevent GPU thermal throttling, then launches the studio)*.
 - **From Command Line:**
+
   ```powershell
   python main.py
   ```
 
 ### Step 4: Run local mini smoke test
+
 Verify mathematical pipeline, policy updates, and checkpoint serialization locally:
+
 ```powershell
 python training/test_mini_train_sample.py
 ```
 
 ### Step 5: Launch Cloud GPU Training
+
 - **Kaggle Dual T4 Training (Automated CLI):**
+
   ```powershell
   python training/push_to_kaggle.py
   ```
+
 - **Google Colab T4 Training (1-Click):**
   👉 **[Open Apollo Training Notebook on Google Colab](https://colab.research.google.com/github/tranvanmanh9325/medical-science/blob/main/colab_apollo_training.ipynb)**  
   *(Or execute headlessly via Colab CLI: `python training/push_to_colab.py --run`)*
 
 ---
 
-## 📚 10. Academic References & Citations
+## 👥 10. Contributors & Maintainers
+
+Contributions, issues, and feature requests are warmly welcomed! Feel free to check the [issues page](https://github.com/tranvanmanh9325/medical-science/issues) or read our [Contributing Guidelines](CONTRIBUTING.md).
+
+| Contributor | Role | Core Responsibility |
+| :---: | :---: | :--- |
+| **[@tranvanmanh9325](https://github.com/tranvanmanh9325)** | **Lead Architect & Maintainer** | Humanoid Robotics Architecture, RL Pipelines, Biomechanics Simulation Studio |
+| **Open Source Community** | **Contributors** | Feature improvements, bug triage, documentation, model validation |
+
+---
+
+## 📚 11. Academic References & Citations
 
 1. **Google DeepMind Menagerie:** [Apptronik Apollo Robot MJCF Model](https://github.com/google-deepmind/mujoco_menagerie/tree/main/apptronik_apollo).
 2. **MuJoCo Physics Engine:** E. Todorov, T. Erez, and Y. Tassa, *"MuJoCo: A physics engine for model-based control,"* IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS), 2012.
@@ -353,6 +378,5 @@ python training/test_mini_train_sample.py
 
 ---
 
-<div align="center">
-  <b>Advancing Humanoid Robotics, Whole-Body Biomechanics & Medical Science</b>
-</div>
+> **Advancing Humanoid Robotics, Whole-Body Biomechanics & Medical Science**
+
