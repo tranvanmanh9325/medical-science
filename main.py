@@ -874,6 +874,11 @@ class BlenderMuJoCoViewer:
 
         # Ưu tiên tìm Stage 2 checkpoint trước (walking), sau đó fallback Stage 1 (balance)
         ck_search_paths = [
+            # Colab output (highest priority — most recent training)
+            os.path.join(project_root, "colab_output", "checkpoints_stage2", "apollo_stage2_final.npz"),
+            os.path.join(project_root, "colab_output", "checkpoints_stage2", "apollo_stage2_v2_latest.npz"),
+            os.path.join(project_root, "colab_output", "checkpoints_stage2", "*.npz"),
+            # Kaggle output (fallback)
             os.path.join(project_root, "kaggle_output", "checkpoints_stage2", "checkpoints", "*.npz"),
             os.path.join(project_root, "kaggle_output", "checkpoints_v15", "checkpoints", "*.npz"),
         ]

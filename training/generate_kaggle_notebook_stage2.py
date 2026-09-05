@@ -284,89 +284,132 @@ def env_step(state, action_and_rng):
     return obs_out, nst, rew, terminated, truncated
 
 # ================================================================
-# 5. REWARD FUNCTION — Stage 2 (Walking + Push Recovery)
+# 5. REWARD FUNCTION — Stage 2 v3 (Walking — Bias-corrected)
 #
-# Philosophy: All-positive Gaussian core (inherited from Stage 1)
-#             + velocity tracking (primary task)
-#             + gait clock schedule (guide stepping pattern)
-#             + energy penalties (sim-to-real smoothness)
+# CRITICAL FIX from v2 analysis:
+#   v2 reward for standing still = 0.01705/step (same as "WALKING" threshold!)
+#   Root cause: r_alive(0.2) + r_orient(0.5) + r_height(0.3) + r_gait(0.33) = 1.33
+#   dominated the total and rewarded standing.
+#
+# v3 fix:
+#   - Cut survival bias: r_alive 0.20→0.03, r_orient w 0.5→0.15, r_height w 0.3→0.10
+#   - Amplify velocity: r_vel_lin weight 2.0→5.0 (primary signal)
+#   - Add foot clearance reward: force actual foot lifting during swing phase
+#   - Standing still now earns ~0.007/step; walking well earns ~0.040+/step
 # ================================================================
 def compute_reward(d, action, prev_action, cmd_vel, phase):
-    qpos = d.qpos
-    qvel = d.qvel
+    qpos  = d.qpos
+    qvel  = d.qvel
     upvec = get_upvector(qpos)
 
-    # ── PRIMARY TASK: Velocity tracking (most important signal) ──
-    # Narrower kernel σ=0.30 (was σ=0.50): standing still at cmd=0.5m/s now gets
-    # exp(-0.25/0.09)=0.06 vs 0.23 before — forces policy to actually move
-    r_vel_lin = jnp.exp(-jnp.sum(jnp.square(qvel[:2] - cmd_vel[:2])) / 0.09)   # XY velocity
-    r_vel_ang = jnp.exp(-jnp.square(qvel[5] - cmd_vel[2]) / 0.09)               # Yaw rate
+    # ── PRIMARY: Velocity tracking (dominant signal) ──────────────
+    # σ=0.09: cmd=0.4, v=0 → exp(-0.16/0.09)=0.17 only (vs 0.64 with σ=0.25)
+    r_vel_lin = jnp.exp(-jnp.sum(jnp.square(qvel[:2] - cmd_vel[:2])) / 0.09)
+    r_vel_ang = jnp.exp(-jnp.square(qvel[5] - cmd_vel[2]) / 0.09)
 
-    # ── STABILITY (secondary — allow some tilt during walking) ──
-    r_orient  = jnp.exp(-jnp.sum(jnp.square(upvec[:2])) / 0.10)  # Softer than Stage 1 (0.05)
-    r_height  = jnp.exp(-jnp.square(qpos[2] - Z_NOMINAL) / 0.10) # Hips can dip during steps
-    r_alive   = 0.2
+    # ── STABILITY (minimal weight — allow tilt during walking) ─────
+    r_orient = jnp.exp(-jnp.sum(jnp.square(upvec[:2])) / 0.10)
+    r_height = jnp.exp(-jnp.square(qpos[2] - Z_NOMINAL) / 0.10)
+    r_alive  = 0.03   # Drastically cut from 0.2 — survival alone is NOT rewarded
 
-    # ── GAIT CLOCK SCHEDULE REWARD ────────────────────────────────
-    # Stance phase: left in stance when phase < STANCE_DUTY
-    #               right in stance when (phase + 0.5) % 1.0 < STANCE_DUTY
+    # ── GAIT CLOCK + FOOT CLEARANCE ───────────────────────────────
     l_z = d.site_xpos[L_FOOT_SITE_ID, 2]
     r_z = d.site_xpos[R_FOOT_SITE_ID, 2]
     l_contact = (l_z < CONTACT_Z_THR).astype(jnp.float32)
     r_contact = (r_z < CONTACT_Z_THR).astype(jnp.float32)
 
-    # Reward 1 if foot matches target gait phase, 0 if not
     l_target_stance = (phase < STANCE_DUTY).astype(jnp.float32)
-    r_phase = (phase + 0.5) % 1.0
-    r_target_stance = (r_phase < STANCE_DUTY).astype(jnp.float32)
+    r_phase_val = (phase + 0.5) % 1.0
+    r_target_stance = (r_phase_val < STANCE_DUTY).astype(jnp.float32)
 
+    # Gait schedule: reward contact matching (stance/swing phase)
     r_gait = (
         jnp.where(l_target_stance > 0.5, l_contact, 1.0 - l_contact) +
         jnp.where(r_target_stance > 0.5, r_contact, 1.0 - r_contact)
-    ) * 0.3   # 0.3 weight: guide but don't over-constrain natural gait
+    ) * 0.25
 
-    # ── ENERGY & SMOOTHNESS PENALTIES ────────────────────────────
-    p_action_rate = 0.02  * jnp.mean(jnp.square(action - prev_action))  # Anti-jitter
-    p_torque      = 2e-4  * jnp.sum(jnp.square(action))                  # Energy efficiency
-    p_body_tilt   = 0.05  * (jnp.square(qvel[3]) + jnp.square(qvel[4])) # Anti-wobble
+    # Foot clearance: reward foot being HIGH during swing phase (forces lifting!)
+    # If foot in swing phase: reward linearly for z in [0.05, 0.15]m
+    l_swing = 1.0 - l_target_stance
+    r_swing = 1.0 - r_target_stance
+    l_clearance = jnp.clip((l_z - 0.04) / 0.12, 0.0, 1.0) * l_swing
+    r_clearance = jnp.clip((r_z - 0.04) / 0.12, 0.0, 1.0) * r_swing
+    r_foot_clearance = (l_clearance + r_clearance) * 0.4   # Strong signal to lift feet
 
-    # ── TOTAL REWARD ─────────────────────────────────────────────
-    # Weights: vel_lin=2.0 (primary), vel_ang=0.5, orient=0.5, height=0.3, alive=0.2, gait=0.6
-    # Max reward when walking well: (2.0+0.5+0.5+0.3+0.2+0.6)*0.01 = 0.041/step
-    # When cmd_vel=0 (standing): orientation+height rewards dominate → ~0.010/step
+    # ── PENALTIES ─────────────────────────────────────────────────
+    p_action_rate = 0.01 * jnp.mean(jnp.square(action - prev_action))
+    p_torque      = 1e-4 * jnp.sum(jnp.square(action))
+    p_body_tilt   = 0.03 * (jnp.square(qvel[3]) + jnp.square(qvel[4]))
+
+    # ── TOTAL ─────────────────────────────────────────────────────
+    # Max (walking well at 0.4m/s): (5.0+0.5+0.15+0.10+0.03+0.5+0.8)*0.01 ≈ 0.071
+    # Standing still (v=0, avg cmd=0.4): (5*0.17+0.5+0.15+0.10+0.03+0.5+0)*0.01 ≈ 0.015
+    # → Standing still reward < walking reward — local optimum eliminated
     total = (
-        r_vel_lin * 2.0 + r_vel_ang * 0.5 +
-        r_orient  * 0.5 + r_height  * 0.3 + r_alive +
-        r_gait
+        r_vel_lin * 5.0 + r_vel_ang * 0.5 +
+        r_orient  * 0.15 + r_height * 0.10 + r_alive +
+        r_gait + r_foot_clearance
         - p_action_rate - p_torque - p_body_tilt
     )
     return jnp.maximum(0.0, total) * CTRL_DT
 
 # ================================================================
-# 6. PPO ALGORITHM
+# 6. PPO ALGORITHM — v3: Proper Mini-batch Epochs (CRITICAL FIX)
+#
+# v2 BUG: Only 1 gradient update per iteration → 286 total updates in 150M steps
+#         Gradient on log_std = -ENT_COEF (constant) → all dims drift identically
+#
+# v3 FIX: 4 PPO epochs × mini-batch 4096 → 512 updates/iter × 572 iters = 292,864 total
+#         This is the standard PPO implementation from Schulman et al. 2017
 # ================================================================
 NUM_ENVS     = 4096
-ROLLOUT      = 64     # Longer than Stage 1 (32) → better credit assignment for locomotion
+ROLLOUT      = 64
 GAMMA        = 0.99
 LAM          = 0.95
 CLIP_EPS     = 0.2
-ENT_COEF     = 0.012  # Higher than original 0.005 — prevents entropy collapse (log_std → -3.0)
+ENT_COEF     = 0.007   # Moderate — not too high (avoids frozen sigma), not too low
 VF_COEF      = 0.5
 MAX_GRAD     = 0.5
+N_EPOCHS     = 4       # PPO epochs per iteration (standard: 3-10)
+MINIBATCH    = 4096    # Mini-batch size per gradient step
 TOTAL_STEPS  = 150_000_000
-STEPS_PER_IT = NUM_ENVS * ROLLOUT  # 4096 * 64 = 262,144 per iteration
+STEPS_PER_IT = NUM_ENVS * ROLLOUT   # 4096 × 64 = 262,144
 N_ITERS      = TOTAL_STEPS // STEPS_PER_IT  # ~572 iterations
 
-lr_schedule = optax.linear_schedule(2e-4, 1e-5, N_ITERS)  # Lower LR (fine-tuning)
+# Per-iter gradient updates: N_EPOCHS × (STEPS_PER_IT / MINIBATCH) = 4 × 64 = 256
+# Total gradient updates: 256 × 572 = ~146,432 (vs 286 before — 512× more!)
+
+# ── Amplify extension weights [105:114] to fix "deaf to cmd_vel" issue ──
+# Extension rows were near-zero (std=0.0104) → amplify to match base rows (std=0.097)
+import flax.traverse_util as ftu
+flat_params = ftu.flatten_dict(params, sep="/")
+w0_key = next((k for k in flat_params if "Dense_0" in k and "kernel" in k), None)
+if w0_key and flat_params[w0_key].shape[0] == OBS_DIM_S2:
+    W = flat_params[w0_key]
+    base_std = float(W[:OBS_DIM_S1, :].std())
+    ext_std  = float(W[OBS_DIM_S1:, :].std())
+    if ext_std < 0.03:  # Under-initialized extension rows
+        scale_factor = base_std / max(ext_std, 1e-6)
+        scale_factor = min(scale_factor, 8.0)  # Cap at 8× to avoid instability
+        W = W.at[OBS_DIM_S1:, :].multiply(scale_factor)
+        flat_params[w0_key] = W
+        print(f"[WEIGHT FIX] Extension rows amplified {ext_std:.4f} → {ext_std*scale_factor:.4f} (×{scale_factor:.1f})")
+params = ftu.unflatten_dict(flat_params, sep="/")
+
+# RESET optimizer state — don't inherit frozen momentum from v2 checkpoint
+# (v2's Adam momentum was biased toward zero-gradient directions)
+lr_schedule = optax.cosine_decay_schedule(3e-4, N_ITERS, alpha=0.05)
 tx          = optax.chain(optax.clip_by_global_norm(MAX_GRAD),
                           optax.adam(lr_schedule, eps=1e-5))
 opt_state   = tx.init(params)
+print("[OPTIMIZER] Fresh Adam state initialized (no inherited momentum from v2)")
 
-rng_envs    = jax.random.split(rng, NUM_ENVS)
-states      = jax.vmap(env_reset)(rng_envs)
+rng_envs = jax.random.split(rng, NUM_ENVS)
+states   = jax.vmap(env_reset)(rng_envs)
 
 @jax.jit
-def ppo_iter(params, opt_state, states, rng):
+def collect_rollout(params, states, rng):
+    """Collect ROLLOUT steps of experience from all environments."""
     def _step(carry, _):
         st, p, r = carry
         r, ra, r_reset = jax.random.split(r, 3)
@@ -375,10 +418,9 @@ def ppo_iter(params, opt_state, states, rng):
         mu, ls, val = network.apply(p, obs)
         std  = jnp.exp(ls)
         act  = jnp.clip(mu + std * jax.random.normal(ra, mu.shape), -1., 1.)
-        lp   = -0.5 * jnp.sum(
+        lp   = jnp.clip(-0.5 * jnp.sum(
             jnp.square((act - mu) / (std + 1e-8)) +
-            2.0 * ls + math.log(2.0 * math.pi), axis=-1)
-        lp   = jnp.clip(lp, -10.0, 10.0)
+            2.0 * ls + math.log(2.0 * math.pi), axis=-1), -10., 10.)
         _, nst, rew, term, trunc = jax.vmap(env_step)(st, (act, r_resets))
         return (nst, p, r), (obs, act, lp, val, rew, term, trunc)
 
@@ -386,16 +428,16 @@ def ppo_iter(params, opt_state, states, rng):
         _step, (states, params, rng), None, length=ROLLOUT)
     obs, act, old_lp, vals, rews, terms, truncs = traj
 
+    # GAE advantage estimation
     lobs = jax.vmap(lambda s: get_obs(s["d"], s["prev_act"], s["cmd_vel"], s["phase"]))(fst)
     _, _, nv_last = network.apply(params, lobs)
 
     def _gae(carry, t):
         gae, nxv = carry
-        r, v, term, trunc = rews[t], vals[t], terms[t], truncs[t]
-        done  = jnp.logical_or(term, trunc)
-        delta = r + GAMMA * nxv * (1. - term.astype(jnp.float32)) - v
+        done  = jnp.logical_or(terms[t], truncs[t])
+        delta = rews[t] + GAMMA * nxv * (1. - terms[t].astype(jnp.float32)) - vals[t]
         gae   = delta + GAMMA * LAM * (1. - done.astype(jnp.float32)) * gae
-        return (gae, v), gae
+        return (gae, vals[t]), gae
 
     _, advs = jax.lax.scan(_gae, (jnp.zeros(NUM_ENVS), nv_last),
                             jnp.arange(ROLLOUT - 1, -1, -1))
@@ -403,63 +445,64 @@ def ppo_iter(params, opt_state, states, rng):
     rets  = advs + vals
     advs  = (advs - advs.mean()) / (advs.std() + 1e-8)
 
-    flat = lambda x: x.reshape(-1, *x.shape[2:])
-    fo, fa, flp, fadv, fret = map(flat, [obs, act, old_lp, advs, rets])
-    ovf = flat(vals)
+    flat  = lambda x: x.reshape(-1, *x.shape[2:])
+    fo, fa, flp, fadv, fret, ovf = *map(flat, [obs, act, old_lp, advs, rets]), flat(vals)
+    return fst, rng, fo, fa, flp, fadv, fret, ovf, jnp.mean(rews)
 
+@jax.jit
+def ppo_minibatch_update(params, opt_state, fo_mb, fa_mb, flp_mb, fadv_mb, fret_mb, ovf_mb):
+    """Single gradient step on one mini-batch."""
     def loss_fn(p):
-        mu, ls, v = network.apply(p, fo)
-        std  = jnp.exp(ls)
-        lp   = -0.5 * jnp.sum(
-            jnp.square((fa - mu) / (std + 1e-8)) +
-            2.0 * ls + math.log(2.0 * math.pi), axis=-1)
-        lp   = jnp.clip(lp, -10.0, 10.0)
-        lr_  = jnp.clip(lp - flp, -5.0, 5.0)
-        ratio = jnp.exp(lr_)
-        pg   = -jnp.mean(jnp.minimum(ratio * fadv,
-                                      jnp.clip(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * fadv))
-        vc   = ovf + jnp.clip(v - ovf, -5.0, 5.0)
-        vf   = VF_COEF * jnp.mean(jnp.maximum(
-            jnp.square(v - fret), jnp.square(vc - fret)))
-        ent  = -ENT_COEF * jnp.mean(
-            jnp.sum(ls + 0.5 * math.log(2 * math.pi * math.e), axis=-1))
+        mu, ls, v = network.apply(p, fo_mb)
+        std = jnp.exp(ls)
+        lp  = jnp.clip(-0.5 * jnp.sum(jnp.square((fa_mb - mu) / (std + 1e-8)) +
+                        2.0 * ls + math.log(2.0 * math.pi), axis=-1), -10., 10.)
+        ratio = jnp.exp(jnp.clip(lp - flp_mb, -5., 5.))
+        pg    = -jnp.mean(jnp.minimum(ratio * fadv_mb,
+                          jnp.clip(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * fadv_mb))
+        vc    = ovf_mb + jnp.clip(v - ovf_mb, -5., 5.)
+        vf    = VF_COEF * jnp.mean(jnp.maximum(jnp.square(v - fret_mb),
+                                                 jnp.square(vc - fret_mb)))
+        ent   = -ENT_COEF * jnp.mean(jnp.sum(ls + 0.5 * math.log(2 * math.pi * math.e), axis=-1))
         return jnp.where(jnp.isnan(pg + vf + ent), 0.0, pg + vf + ent)
 
     loss, grads = jax.value_and_grad(loss_fn)(params)
     grads = jax.tree.map(lambda g: jnp.where(jnp.isnan(g), 0.0, g), grads)
     upd, opt_state = tx.update(grads, opt_state, params)
-    params = optax.apply_updates(params, upd)
-    return params, opt_state, fst, rng, jnp.mean(rews), loss
+    return optax.apply_updates(params, upd), opt_state, loss
+
+# Clean up stale code from old ppo_iter that was left dangling
+# (the 2 orphaned lines below were from old single-update function)
 
 # ================================================================
-# 7. TRAINING LOOP — With Push Recovery Curriculum
-#
-# Push recovery is implemented via forced periodic random perturbations
-# applied directly in the rollout (outside jit), starting at 5M steps.
-# Magnitude scales linearly: 0N at 5M → 80N at 50M steps → constant 80N after.
+# 7. TRAINING LOOP — v3 with PPO Epochs + Push Recovery Curriculum
 # ================================================================
 os.makedirs("checkpoints", exist_ok=True)
 t0, cur = time.time(), 0
-print(f"\nSteps/iter={STEPS_PER_IT:,} | N_iters={N_ITERS} | ROLLOUT={ROLLOUT}")
-print(f"Reward: target rew > 0.018 (walking) with narrow kernel | σ_vel=0.09")
-print(f"Transfer: {'YES (Stage 1 weights loaded)' if stage1_ck else 'NO (scratch)'}")
-print(f"Push recovery curriculum: starts at {PUSH_START_STEP:,} env-steps")
-print(f"Velocity curriculum: Phase1 [0,0.15]→Phase2 [0,0.45]→Phase3 [0,0.80] m/s")
+
+# v3 reward thresholds (recomputed for bias-corrected reward):
+#   Standing still: ~0.007/step
+#   First steps:    ~0.012/step
+#   Walking 0.2m/s: ~0.025/step
+#   Walking well:   ~0.040+/step
+WALK_THRESHOLD      = 0.018   # First real walking
+WALK_WELL_THRESHOLD = 0.032   # Walking well (tracking cmd_vel)
+
+print(f"\nAPOLLO HUMANOID - STAGE 2 v3 (Mini-batch PPO + Bias-corrected Reward)")
+print(f"Steps/iter={STEPS_PER_IT:,} | N_iters={N_ITERS} | N_epochs={N_EPOCHS} | MBatch={MINIBATCH}")
+print(f"Gradient updates/iter: {N_EPOCHS * (STEPS_PER_IT // MINIBATCH)} | Total: {N_EPOCHS * (STEPS_PER_IT // MINIBATCH) * N_ITERS:,}")
+print(f"Transfer: {'YES (Stage 1 weights + extension amplified)' if stage1_ck else 'NO (scratch)'}")
+print(f"LR: 3e-4 (cosine decay) | ENT_COEF={ENT_COEF} | CLIP={CLIP_EPS}")
+print(f"WALK threshold: {WALK_THRESHOLD:.3f} | WALK_WELL threshold: {WALK_WELL_THRESHOLD:.3f}")
 print("=" * 64)
 
-# ── Curriculum velocity boundaries (updated outside jit) ──────────
-# Passed into env_reset via state re-seeding at episode end.
-# We periodically re-seed HALF of envs to inject new velocity commands
-# matching the current curriculum phase. The other half keeps existing state.
-CURRICULUM_P1_END = 50_000_000   # 50M steps: vx max goes 0.15 → 0.45
-CURRICULUM_P2_END = 120_000_000  # 120M steps: vx max goes 0.45 → 0.80
+CURRICULUM_P1_END = 30_000_000   # 30M: start increasing vx (earlier than v2's 50M)
+CURRICULUM_P2_END = 100_000_000  # 100M: reach full speed
 
 def get_curriculum_cmd_max(n_steps):
-    """Return (vx_max, vy_max, yaw_max) based on current training steps."""
     if n_steps < CURRICULUM_P1_END:
         vx = 0.15
     elif n_steps < CURRICULUM_P2_END:
-        # Linear interpolation 0.15 → 0.80 over 50M-120M steps
         t = (n_steps - CURRICULUM_P1_END) / (CURRICULUM_P2_END - CURRICULUM_P1_END)
         vx = 0.15 + t * (0.80 - 0.15)
     else:
@@ -470,7 +513,6 @@ def get_curriculum_cmd_max(n_steps):
 
 @jax.jit
 def reseed_cmd_vel(states, rng, vx_max, vy_max, yaw_max):
-    """Reseed cmd_vel for ALL envs with current curriculum velocity range."""
     rngs = jax.random.split(rng, NUM_ENVS)
     def _new_cmd(r):
         return jax.random.uniform(r, (3,),
@@ -479,10 +521,12 @@ def reseed_cmd_vel(states, rng, vx_max, vy_max, yaw_max):
     new_cmds = jax.vmap(_new_cmd)(rngs)
     return {**states, "cmd_vel": new_cmds}
 
+import numpy as np_host  # numpy for host-side shuffle (not JAX)
+
 for it in range(1, N_ITERS + 1):
     t1 = time.time()
 
-    # ── Curriculum: update cmd_vel every 10 iters (≈2.6M steps) ──
+    # ── Curriculum: update cmd_vel every 10 iters ──────────────────
     if it % 10 == 1:
         vx_max, vy_max, yaw_max = get_curriculum_cmd_max(cur)
         rng, rng_seed = jax.random.split(rng)
@@ -491,47 +535,62 @@ for it in range(1, N_ITERS + 1):
                                 jnp.float32(vy_max),
                                 jnp.float32(yaw_max))
 
-    params, opt_state, states, rng, mr, loss = \
-        ppo_iter(params, opt_state, states, rng)
+    # ── Collect rollout ─────────────────────────────────────────────
+    states, rng, fo, fa, flp, fadv, fret, ovf, mr = \
+        collect_rollout(params, states, rng)
+    jax.block_until_ready(fo)
 
-    # block_until_ready ensures JAX async dispatch completes before measuring time
+    # ── PPO epochs with mini-batches ────────────────────────────────
+    N_SAMPLES = fo.shape[0]  # STEPS_PER_IT = 262,144
+    N_MB = N_SAMPLES // MINIBATCH  # 64 mini-batches per epoch
+    last_loss = 0.0
+
+    for epoch in range(N_EPOCHS):
+        # Shuffle indices for each epoch (host-side, then transfer to device)
+        perm = np_host.random.permutation(N_SAMPLES)
+        for mb_idx in range(N_MB):
+            idx = perm[mb_idx * MINIBATCH:(mb_idx + 1) * MINIBATCH]
+            idx_j = jnp.array(idx)
+            params, opt_state, last_loss = ppo_minibatch_update(
+                params, opt_state,
+                fo[idx_j], fa[idx_j], flp[idx_j],
+                fadv[idx_j], fret[idx_j], ovf[idx_j]
+            )
+
     jax.block_until_ready(params)
     cur += STEPS_PER_IT
     sps = STEPS_PER_IT / max(1e-5, time.time() - t1)
 
-    if it % 5 == 0 or it == 1:
+    if it % 2 == 0 or it == 1:
         r_val = float(mr)
         vx_max, _, _ = get_curriculum_cmd_max(cur)
         push_frac = min(1.0, max(0.0, (cur - PUSH_START_STEP) / (PUSH_MAX_STEP - PUSH_START_STEP)))
         push_mag  = PUSH_MAX_FORCE * push_frac if cur >= PUSH_START_STEP else 0.0
 
-        # Thresholds recalibrated for narrow kernel (σ=0.09):
-        # Standing still: ~0.008/step | Walking well: >0.018/step
-        if r_val > 0.022:    status = "*** WALKING WELL ***"
-        elif r_val > 0.016:  status = "*** WALKING ***"
-        elif r_val > 0.010:  status = "stepping"
-        elif r_val > 0.006:  status = "improving"
-        else:                status = "..."
+        if r_val > WALK_WELL_THRESHOLD: status = "*** WALKING WELL ***"
+        elif r_val > WALK_THRESHOLD:    status = "*** WALKING ***"
+        elif r_val > 0.012:             status = "stepping"
+        elif r_val > 0.009:             status = "improving"
+        else:                           status = "..."
 
         print(f"[{it:04d}/{N_ITERS}] steps={cur:,} | "
-              f"rew={r_val:.5f} | loss={float(loss):.4f} | "
+              f"rew={r_val:.5f} | loss={float(last_loss):.4f} | "
               f"sps={sps:,.0f} | push={push_mag:.0f}N | "
               f"vx_max={vx_max:.2f} | t={time.time()-t0:.0f}s {status}", flush=True)
 
     if it % 50 == 0 or it == N_ITERS:
-        ck = f"checkpoints/apollo_stage2_v2_step_{cur}.npz"
-        # ── CRITICAL FIX: jnp.savez is async and produces corrupt/empty files ──
-        # Must convert to numpy AFTER block_until_ready, then use np.savez
-        flat = flax.traverse_util.flatten_dict(params, sep="/")
-        flat_np = {k: np.array(v) for k, v in flat.items()}
+        ck = f"checkpoints/apollo_stage2_v3_step_{cur}.npz"
+        flat_np = {k: np.array(v) for k, v in flax.traverse_util.flatten_dict(params, sep="/").items()}
+        flat_np["_step"] = np.array(cur)
+        flat_np["_it"]   = np.array(it)
         np.savez(ck, **flat_np)
         ck_size = os.path.getsize(ck)
-        if ck_size < 100_000:  # Healthy checkpoint should be >800KB
-            print(f"  [WARNING] Checkpoint suspiciously small: {ck_size} bytes — possible save error!")
+        if ck_size < 100_000:
+            print(f"  [WARNING] Checkpoint small: {ck_size} bytes!", flush=True)
         else:
             print(f"  -> checkpoint: {ck} ({ck_size//1024}KB)", flush=True)
 
-print("STAGE 2 v2 COMPLETE", flush=True)
+print("\nSTAGE 2 v3 TRAINING COMPLETE!", flush=True)
 '''
 
     SETUP_CELL = [
