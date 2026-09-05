@@ -1843,14 +1843,9 @@ class BlenderMuJoCoViewer:
                 gl.glMatrixMode(gl.GL_MODELVIEW)
 
                 glfw.swap_buffers(self.window)
-
-                # Giới hạn 60 FPS chuẩn để hạ nhiệt GPU, giảm tải GPU từ 45% xuống < 10%
-                elapsed = time.time() - now
-                target_frame_time = 1.0 / 60.0
-                if elapsed < target_frame_time:
-                    time.sleep(target_frame_time - elapsed)
         finally:
             self.cleanup()
+
 
 
     def cleanup(self):
