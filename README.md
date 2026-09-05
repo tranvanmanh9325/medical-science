@@ -1,6 +1,6 @@
 # 🤖 Apptronik Apollo Humanoid — Biomechanics Telemetry & MJX Deep Reinforcement Learning Suite
 
-[![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.14-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![MuJoCo](https://img.shields.io/badge/MuJoCo-3.12.0%2B-orange?logo=google&logoColor=white)](https://mujoco.org/)
 [![JAX / MJX](https://img.shields.io/badge/JAX%20%2F%20MJX-GPU%20Vectorized-crimson?logo=google&logoColor=white)](https://github.com/google-deepmind/mujoco)
 [![Flax / Optax](https://img.shields.io/badge/Flax-PPO%20Actor--Critic-blueviolet)](https://github.com/google/flax)
@@ -308,7 +308,7 @@ medical-science/
 ### System Requirements
 
 - **Operating System:** Windows 10/11 (64-bit) or Ubuntu 20.04/22.04 LTS.
-- **Python:** Python 3.10 through 3.14.
+- **Python:** Python >= 3.10 (Fully tested across Python 3.10 – 3.14).
 - **GPU (Recommended for 3D Viewport):** NVIDIA GeForce GTX 1650 / RTX 3050 or higher (OpenGL 3.3+ support).
 
 ### Step 1: Clone the repository
