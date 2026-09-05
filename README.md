@@ -6,8 +6,8 @@
 [![Flax / Optax](https://img.shields.io/badge/Flax-PPO%20Actor--Critic-blueviolet)](https://github.com/google/flax)
 [![Kaggle Dual T4](https://img.shields.io/badge/Kaggle-2x%20NVIDIA%20T4%20(32GB)-20BEFF?logo=kaggle&logoColor=white)](https://www.kaggle.com/)
 [![Google Colab](https://img.shields.io/badge/Google%20Colab-T4%20GPU%20Ready-F9AB00?logo=googlecolab&logoColor=white)](https://colab.research.google.com/)
-[![Throughput](https://img.shields.io/badge/Throughput-540%2C000%2B%20Steps%2Fsec-success)](#)
-[![License](https://img.shields.io/badge/License-Apache%202.0%20%2F%20MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 
 ---
 
