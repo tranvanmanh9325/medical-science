@@ -120,15 +120,24 @@ l_ankle_ie     [-0.65, 0.31] | ±120.0 Nm                 r_ankle_ie     [-0.31,
 
 ### 📐 105-Dimensional Observation Vector
 
-$$\mathbf{O}_t = \left[ \mathbf{u}_z^{body}, \; \mathbf{v}_{base}, \; \boldsymbol{\omega}_{base}, \; (\mathbf{q}_{joint} - \mathbf{q}_{nominal}), \; \dot{\mathbf{q}}_{joint}, \; \mathbf{a}_{t-1} \right] \in \mathbb{R}^{105}$$
+$$
+\mathbf{O}_t = \left[ \mathbf{u}_z^{body}, \; \mathbf{v}_{base}, \; \boldsymbol{\omega}_{base}, \; (\mathbf{q}_{joint} - \mathbf{q}_{nominal}), \; \dot{\mathbf{q}}_{joint}, \; \mathbf{a}_{t-1} \right] \in \mathbb{R}^{105}
+$$
 
-- $\mathbf{u}_z^{body} \in \mathbb{R}^3$: Pelvis body Z-axis unit vector in world coordinates derived from orientation quaternion $[q_w, q_x, q_y, q_z]$:
-  $$\mathbf{u}_z^{body} = \begin{bmatrix} 2(q_x q_z + q_w q_y) \\ 2(q_y q_z - q_w q_x) \\ 1 - 2(q_x^2 + q_y^2) \end{bmatrix} \quad (\mathbf{u}_z = [0, 0, 1]^T \text{ when strictly upright})$$
-- $\mathbf{v}_{base} \in \mathbb{R}^3$: Pelvic root linear velocity vector $[v_x, v_y, v_z]$.
-- $\boldsymbol{\omega}_{base} \in \mathbb{R}^3$: Pelvic root angular velocity vector $[\omega_x, \omega_y, \omega_z]$.
-- $\Delta \mathbf{q} \in \mathbb{R}^{32}$: Angular position deviation from nominal keyframe posture $\mathbf{q}_{nominal}$.
-- $\dot{\mathbf{q}} \in \mathbb{R}^{32}$: Instantaneous angular velocity of the 32 joints.
-- $\mathbf{a}_{t-1} \in \mathbb{R}^{32}$: Normalized action vector from previous control cycle.
+The body gravitational alignment vector $\mathbf{u}_z^{body} \in \mathbb{R}^3$ is derived from the base orientation quaternion $\mathbf{q}_{base} = [q_w, q_x, q_y, q_z]$:
+
+$$
+\mathbf{u}_z^{body} = \begin{bmatrix} 2(q_x q_z + q_w q_y) \\ 2(q_y q_z - q_w q_x) \\ 1 - 2(q_x^2 + q_y^2) \end{bmatrix}, \quad \mathbf{u}_z^{nominal} = \begin{bmatrix} 0 \\ 0 \\ 1 \end{bmatrix}
+$$
+
+The 105 state dimensions decompose into 6 biomechanical channels:
+
+- **Pelvis Upright Direction Vector** ($\mathbf{u}_z^{body} \in \mathbb{R}^3$): Gravitational alignment unit vector ($[0, 0, 1]^T$ in upright nominal stance).
+- **Pelvic Linear Velocity** ($\mathbf{v}_{base} \in \mathbb{R}^3$): Pelvic root linear velocity vector $[v_x, v_y, v_z]$.
+- **Pelvic Angular Velocity** ($\boldsymbol{\omega}_{base} \in \mathbb{R}^3$): Pelvic root angular velocity vector $[\omega_x, \omega_y, \omega_z]$.
+- **Joint Angular Deviations** ($\Delta \mathbf{q} \in \mathbb{R}^{32}$): Joint angle deviations from nominal keyframe standing posture $\mathbf{q} - \mathbf{q}_{nominal}$.
+- **Joint Angular Velocities** ($\dot{\mathbf{q}} \in \mathbb{R}^{32}$): Instantaneous angular velocity of all 32 joints.
+- **Previous Action Memory** ($\mathbf{a}_{t-1} \in \mathbb{R}^{32}$): Normalized actuator command vector from the preceding cycle.
 
 ```mermaid
 flowchart LR
@@ -165,21 +174,23 @@ flowchart LR
 
 The reinforcement learning objective follows Google DeepMind humanoid balance formulations, establishing an optimal trade-off between postural stability and metabolic torque efficiency:
 
-$$\mathcal{R}_t = \Delta t \cdot \left[ r_{lin\_vel} + r_{ang\_vel} - c_{vz} - c_{\omega\_xy} - c_{orient} - c_{stand} - c_{torque} - c_{rate} - c_{limit} \right]$$
+$$
+\mathcal{R}_t = \Delta t \cdot \left[ r_{lin\_vel} + r_{ang\_vel} - c_{vz} - c_{\omega\_xy} - c_{orient} - c_{stand} - c_{torque} - c_{rate} - c_{limit} \right]
+$$
 
 Detailed breakdown of reward coefficients and physical objectives:
 
 | Component | Weight ($w_i$) | Formulation | Physical & Biomechanical Objective |
 | :--- | :---: | :--- | :--- |
-| **Linear Velocity Tracking ($r_{lin\_vel}$)** | $+1.0$ | $\exp\left(-\frac{v_x^2 + v_y^2}{\sigma}\right), \; \sigma = 0.25$ | Penalizes lateral planar drift, enforces stationary base |
-| **Yaw Spin Suppression ($r_{ang\_vel}$)** | $+0.5$ | $\exp\left(-\frac{\omega_z^2}{\sigma}\right)$ | Suppresses uncommanded rotational spinning around vertical Z axis |
-| **Vertical Oscillation Penalty ($c_{vz}$)** | $-2.0$ | $v_z^2$ | Damps vertical bouncing and pelvis pumping |
-| **Roll/Pitch Rate Penalty ($c_{\omega\_xy}$)** | $-0.05$ | $\omega_x^2 + \omega_y^2$ | Minimizes lateral swaying and forward/backward torso tilting |
-| **Upright Orientation Penalty ($c_{orient}$)** | $-1.0$ | $(u_x^{body})^2 + (u_y^{body})^2$ | Penalizes deviation from gravitational vertical axis |
-| **Postural Stance Penalty ($c_{stand}$)** | $-0.5$ | $\sum_{i=1}^{32} \|q_i - q_i^{nominal}\|$ | Encourages nominal limb configurations and prevents awkward joint locks |
-| **Actuator Torque Cost ($c_{torque}$)** | $-10^{-4}$ | $\sqrt{\sum \tau_i^2} + \sum \|\tau_i\|$ | Minimizes motor thermal dissipation and energy consumption |
-| **Action Smoothness Penalty ($c_{rate}$)** | $-0.01$ | $\sum_{i=1}^{32} (a_{i,t} - a_{i,t-1})^2$ | Enforces second-order action smoothness, eliminating mechanical jitter |
-| **Joint Limit Penalty ($c_{limit}$)** | $-10.0$ | $\sum \left( [q - q_{max}]_+ + [q_{min} - q]_+ \right)$ | Strict barrier penalty preventing hard mechanical joint limit collisions |
+| **Linear Velocity Tracking** ($r_{lin\_vel}$) | $+1.0$ | $\exp(-(v_x^2 + v_y^2)/\sigma), \; \sigma = 0.25$ | Penalizes lateral planar drift, enforces stationary base |
+| **Yaw Spin Suppression** ($r_{ang\_vel}$) | $+0.5$ | $\exp(-\omega_z^2/\sigma)$ | Suppresses uncommanded rotational spinning around vertical Z axis |
+| **Vertical Oscillation Penalty** ($c_{vz}$) | $-2.0$ | $v_z^2$ | Damps vertical bouncing and pelvis pumping |
+| **Roll/Pitch Rate Penalty** ($c_{\omega\_xy}$) | $-0.05$ | $\omega_x^2 + \omega_y^2$ | Minimizes lateral swaying and forward/backward torso tilting |
+| **Upright Orientation Penalty** ($c_{orient}$) | $-1.0$ | $(u_x^{body})^2 + (u_y^{body})^2$ | Penalizes deviation from gravitational vertical axis |
+| **Postural Stance Penalty** ($c_{stand}$) | $-0.5$ | $\sum_{i=1}^{32} \left\|q_i - q_i^{nominal}\right\|$ | Encourages nominal limb configurations and prevents awkward joint locks |
+| **Actuator Torque Cost** ($c_{torque}$) | $-10^{-4}$ | $\sqrt{\sum \tau_i^2} + \sum \|\tau_i\|$ | Minimizes motor thermal dissipation and energy consumption |
+| **Action Smoothness Penalty** ($c_{rate}$) | $-0.01$ | $\sum_{i=1}^{32} (a_{i,t} - a_{i,t-1})^2$ | Enforces second-order action smoothness, eliminating mechanical jitter |
+| **Joint Limit Penalty** ($c_{limit}$) | $-10.0$ | `` $`\sum_{j=1}^{32} \max(0, \lvert q_j \rvert - q_j^{\text{limit}})`$ `` | Strict barrier penalty preventing hard mechanical joint limit collisions |
 
 ### 🛑 Early Episode Termination Criteria
 

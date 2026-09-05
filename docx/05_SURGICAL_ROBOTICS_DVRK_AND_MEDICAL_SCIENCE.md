@@ -190,7 +190,9 @@ Vì không gian đầu dụng cụ quá nhỏ, các động cơ điện không t
 - Lực truyền từ động cơ xuống các trục khớp thông qua hệ thống **dây cáp vonfram bện siêu mịn (multi-strand tungsten cables)** chạy luồn qua lòng que rỗng và quấn quanh các rãnh pulley tí hon tại cổ tay.
 - Ma trận phân phối sức căng dây cáp (Cable Tension Coupling Matrix) biến chuyển động quay của 4 đĩa truyền động ở chuôi thành các góc quay độc lập $(\theta_{roll}, \theta_{pitch}, \theta_{yaw}, \theta_{grip})$:
 
-$$\begin{bmatrix} \tau_{roll} \\ \tau_{pitch} \\ \tau_{yaw} \\ \tau_{grip} \end{bmatrix} = \mathbf{T}_{cable} \begin{bmatrix} f_{cable, 1} \\ f_{cable, 2} \\ f_{cable, 3} \\ f_{cable, 4} \end{bmatrix}$$
+$$
+\begin{bmatrix} \tau_{roll} \\ \tau_{pitch} \\ \tau_{yaw} \\ \tau_{grip} \end{bmatrix} = \mathbf{T}_{cable} \begin{bmatrix} f_{cable, 1} \\ f_{cable, 2} \\ f_{cable, 3} \\ f_{cable, 4} \end{bmatrix}
+$$
 
 ### 3.3. Thông số Động lực học & Bộ điều khiển Vị trí PD
 

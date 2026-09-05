@@ -137,21 +137,37 @@ Phần thưởng Tổng = [ Khuyến khích đứng yên ] - [ Phạt mất thă
 
 ### Chi Tiết Từng Số Hạng Trong Hàm Thưởng
 
-1. **Khuyến khích Triệt tiêu Vận tốc Trôi ngang ($r_{lin\_vel}$):**
-   $$r_{lin\_vel} = 1.0 \cdot \exp\left( -\frac{v_x^2 + v_y^2}{0.25} \right)$$
-   Sử dụng hàm nhân Gauss (Gaussian Kernel). Khi $v_{xy} = 0$, số hạng đạt giá trị cực đại $+1.0$. Khi robot trôi dạt với tốc độ $> 0.5\text{ m/s}$, giá trị nhanh chóng tiệm cận về 0.
+#### 1. Khuyến khích Triệt tiêu Vận tốc Trôi ngang ($r_{lin\_vel}$)
 
-2. **Khuyến khích Giữ Hướng Đứng Thẳng Tuyệt Đối ($c_{orient}$):**
-   $$c_{orient} = -1.0 \cdot \left[ (u_x^{body})^2 + (u_y^{body})^2 \right]$$
-   Với $\mathbf{u}_z^{body} = [u_x, u_y, u_z]^T$ là trục $Z$ thân trên. Khi đứng thẳng hoàn hảo, $u_x = 0, u_y = 0 \implies c_{orient} = 0$. Bất kỳ độ nghiêng nào cũng bị phạt theo bình phương góc lệch.
+$$
+r_{lin\_vel} = 1.0 \cdot \exp\left( -\frac{v_x^2 + v_y^2}{0.25} \right)
+$$
 
-3. **Phạt Năng Lượng Tiêu Thụ Khớp ($c_{torque}$):**
-   $$c_{torque} = -10^{-4} \cdot \left( \sqrt{\sum_{i=1}^{32} \tau_i^2} + \sum_{i=1}^{32} |\tau_i| \right)$$
-   Kết hợp chuẩn $L_2$ (phạt các đỉnh lực quá cao đột ngột) và chuẩn $L_1$ (khuyến khích tính thưa thớt, thả lỏng các khớp không cần thiết).
+Sử dụng hàm nhân Gauss (Gaussian Kernel). Khi $v_{xy} = 0$, số hạng đạt giá trị cực đại $+1.0$. Khi robot trôi dạt với tốc độ $> 0.5\text{ m/s}$, giá trị nhanh chóng tiệm cận về 0.
 
-4. **Phạt Gia Tốc Giật Khớp ($c_{rate}$):**
-   $$c_{rate} = -0.01 \cdot \sum_{i=1}^{32} (a_{i, t} - a_{i, t-1})^2$$
-   Ép mạng Actor sinh ra các quỹ đạo điều khiển liên tục và mượt mà, loại bỏ hiện tượng rung cơ khí (chatter) phá hủy hộp số thực tế.
+#### 2. Khuyến khích Giữ Hướng Đứng Thẳng Tuyệt Đối ($c_{orient}$)
+
+$$
+c_{orient} = -1.0 \cdot \left[ (u_x^{body})^2 + (u_y^{body})^2 \right]
+$$
+
+Với $\mathbf{u}_z^{body} = [u_x, u_y, u_z]^T$ là trục $Z$ thân trên. Khi đứng thẳng hoàn hảo, $u_x = 0, u_y = 0 \implies c_{orient} = 0$. Bất kỳ độ nghiêng nào cũng bị phạt theo bình phương góc lệch.
+
+#### 3. Phạt Năng Lượng Tiêu Thụ Khớp ($c_{torque}$)
+
+$$
+c_{torque} = -10^{-4} \cdot \left( \sqrt{\sum_{i=1}^{32} \tau_i^2} + \sum_{i=1}^{32} |\tau_i| \right)
+$$
+
+Kết hợp chuẩn $L_2$ (phạt các đỉnh lực quá cao đột ngột) và chuẩn $L_1$ (khuyến khích tính thưa thớt, thả lỏng các khớp không cần thiết).
+
+#### 4. Phạt Gia Tốc Giật Khớp ($c_{rate}$)
+
+$$
+c_{rate} = -0.01 \cdot \sum_{i=1}^{32} (a_{i, t} - a_{i, t-1})^2
+$$
+
+Ép mạng Actor sinh ra các quỹ đạo điều khiển liên tục và mượt mà, loại bỏ hiện tượng rung cơ khí (chatter) phá hủy hộp số thực tế.
 
 ---
 

@@ -22,9 +22,11 @@ kaggle_output/
 kaggle_output_*/
 checkpoints/
 
-# OS Specific
+# OS & IDE
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/
 
 # Python Packaging & Build Artifacts
 *.egg-info/

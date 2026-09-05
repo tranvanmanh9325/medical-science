@@ -207,7 +207,9 @@ Tổng số chiều Stage 1: $3 + 3 + 3 + 32 + 32 + 32 = 105$.
 
 Để tránh điểm gián đoạn toán học tại ranh giới chu kỳ ($\phi = 0.999 \to 0.000$), pha $\phi \in [0, 1)$ được biến đổi sang tọa độ lượng giác liên tục trên đường tròn đơn vị:
 
-$$\mathbf{p}_{gait} = \begin{bmatrix} \sin(2\pi \phi) \\ \cos(2\pi \phi) \\ \sin(2\pi (\phi + 0.5)) \\ \cos(2\pi (\phi + 0.5)) \end{bmatrix} \in \mathbb{R}^4$$
+$$
+\mathbf{p}_{gait} = \begin{bmatrix} \sin(2\pi \phi) \\ \cos(2\pi \phi) \\ \sin(2\pi (\phi + 0.5)) \\ \cos(2\pi (\phi + 0.5)) \end{bmatrix} \in \mathbb{R}^4
+$$
 
 Chân phải luôn lệch pha chính xác $\Delta \phi = 0.5$ (180 độ) so với chân trái, đảm bảo dáng đi bước luân phiên hoàn hảo.
 
@@ -295,17 +297,23 @@ Trong phiên bản v2 trước đây, tổng điểm thưởng sinh tồn và du
 
 Hàm thưởng Stage 2 v4 tái cân bằng triệt để:
 
-1. Giảm thiểu điểm sinh tồn: $w_{alive}$ hạ từ $0.20$ xuống $0.03$.
-2. Giảm trọng số giữ thẳng: $w_{orient}$ từ $0.5$ xuống $0.15$, cho phép cơ thể lắc lư tự nhiên theo nhịp đi.
-3. Khuếch đại tín hiệu bám vận tốc tuyến tính ($w_{vel\_lin} = 5.0$) với hàm hạt nhân hẹp $\sigma^2 = 0.09$:
+- **Giảm thiểu điểm sinh tồn**: $w_{alive}$ hạ từ $0.20$ xuống $0.03$.
+- **Giảm trọng số giữ thẳng**: $w_{orient}$ từ $0.5$ xuống $0.15$, cho phép cơ thể lắc lư tự nhiên theo nhịp đi.
+- **Khuếch đại tín hiệu bám vận tốc tuyến tính** ($w_{vel\_lin} = 5.0$) với hàm hạt nhân hẹp $\sigma^2 = 0.09$:
 
-   $$r_{vel\_lin} = \exp\left(-\frac{\|\mathbf{v}_{xy} - \mathbf{v}_{cmd, xy}\|^2}{0.09}\right)$$
+$$
+r_{vel\_lin} = \exp\left(-\frac{\|\mathbf{v}_{xy} - \mathbf{v}_{cmd, xy}\|^2}{0.09}\right)
+$$
 
-   Nếu mục tiêu là $0.4\text{ m/s}$ mà robot đứng yên ($\mathbf{v}_{xy} = 0$):
-   $$r_{vel\_lin} = \exp\left(-\frac{0.16}{0.09}\right) \approx 0.169 \implies 5.0 \times 0.169 = 0.845$$
-   So với khi bám vận tốc thành công: $5.0 \times 1.0 = 5.0$.
+Nếu mục tiêu là $0.4\text{ m/s}$ mà robot đứng yên ($\mathbf{v}_{xy} = 0$):
 
-4. Thưởng nhấc cao chân trong pha vung ($r_{foot\_clearance}$):
+$$
+r_{vel\_lin} = \exp\left(-\frac{0.16}{0.09}\right) \approx 0.169 \implies 5.0 \times 0.169 = 0.845
+$$
+
+So với khi bám vận tốc thành công: $5.0 \times 1.0 = 5.0$.
+
+- **Thưởng nhấc cao chân trong pha vung ($r_{foot\_clearance}$)**:
 Nếu chân đang ở pha vung ($1 - \text{stance\_duty}$), thưởng tỷ lệ thuận với độ cao bàn chân $z_{foot} \in [0.04\text{m}, 0.16\text{m}]$ với trọng số $+0.4$. Yếu tố này ép buộc mạng điều khiển phải thực hiện động tác gập đầu gối và nhấc bàn chân dứt khoát khỏi sàn.
 
 ### 4.6. Tối ưu hóa Mini-batch Epochs & Dừng sớm theo Phân kỳ KL (KL Early Stopping)
