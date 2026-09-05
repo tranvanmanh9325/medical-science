@@ -11,7 +11,6 @@
 
 ---
 
-
 ## 📌 1. Project Overview & Research Mission
 
 **`medical-science`** is an advanced scientific research platform uniting **Humanoid Robotics Biomechanics**, **Whole-Body Locomotion Control**, and **Hardware-Accelerated Deep Reinforcement Learning on GPUs**.
@@ -379,4 +378,3 @@ Contributions, issues, and feature requests are warmly welcomed! Feel free to ch
 ---
 
 > **Advancing Humanoid Robotics, Whole-Body Biomechanics & Medical Science**
-

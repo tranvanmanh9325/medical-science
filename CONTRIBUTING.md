@@ -13,6 +13,7 @@ By participating in this project, you agree to abide by our [Code of Conduct](CO
 ## 🛠️ How to Contribute
 
 ### 1. Reporting Bugs
+
 - Before submitting a bug report, check the [existing issues](https://github.com/tranvanmanh9325/medical-science/issues) to avoid duplicates.
 - When opening an issue, provide:
   - Clear, reproducible steps.
@@ -21,17 +22,22 @@ By participating in this project, you agree to abide by our [Code of Conduct](CO
   - Hardware specifications (CPU, GPU model, VRAM).
 
 ### 2. Suggesting Enhancements
+
 We actively encourage proposals for:
+
 - New biomechanical metrics (e.g., foot pressure center distributions, joint metabolic expenditure).
 - New reinforcement learning environments (e.g., rough terrain locomotion, push recovery adaptations).
 - Improved rendering shaders, HUD telemetry overlays, or physics solver configurations.
 
 ### 3. Submitting Pull Requests (PRs)
+
 1. **Fork the Repository:** Create a personal fork on GitHub.
 2. **Create a Feature Branch:**
+
    ```bash
    git checkout -b feature/your-feature-name
    ```
+
 3. **Coding Standards:**
    - Adhere strictly to **PEP 8** conventions.
    - Follow the **DRY (Don't Repeat Yourself)** principle.
@@ -39,9 +45,11 @@ We actively encourage proposals for:
    - Avoid breaking existing simulation loops (`main.py`) or training pipelines (`training/`).
 4. **Local Verification:**
    - Always run the local smoke test before pushing:
+
      ```powershell
      python training/test_mini_train_sample.py
      ```
+
    - Verify that `main.py` launches and cleans up GPU resources cleanly without process leakage.
 5. **Commit Message Format:**
    Commit messages must follow the [Conventional Commits](https://www.conventionalcommits.org/) specification:

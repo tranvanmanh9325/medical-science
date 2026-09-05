@@ -22,12 +22,15 @@ If you discover a security vulnerability in this project, **please do not open a
 Instead, please report security concerns through one of the following channels:
 
 ### 1. GitHub Private Vulnerability Reporting (Recommended)
+
 You can report vulnerabilities privately and directly via GitHub:
+
 1. Navigate to the [Security Tab](https://github.com/tranvanmanh9325/medical-science/security) of this repository.
 2. Click on **"Report a vulnerability"** under the Advisories section.
 3. Provide a detailed summary, steps to reproduce, and any proof-of-concept (PoC) code.
 
 ### 2. Direct Maintainer Communication
+
 - Contact the lead maintainer directly via GitHub: [@tranvanmanh9325](https://github.com/tranvanmanh9325)
 - Please include:
   - Description of the issue (e.g., buffer overflow in C-bindings, credential leakage, remote code execution risks).
