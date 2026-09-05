@@ -64,33 +64,60 @@ We actively encourage proposals for:
 
 ## 👥 Contributors & Maintainers
 
-### 🏛️ Lead Architect & Maintainer
+We gratefully acknowledge the contributions of our project team and the open-source community. As this project expands, all contributors will be recognized in the contributor grid below.
 
-<table>
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table align="center">
   <tbody>
     <tr>
-      <td align="center" valign="middle" width="160">
+      <td align="center" valign="top" width="260">
         <a href="https://github.com/tranvanmanh9325">
-          <img src="https://avatars.githubusercontent.com/u/86815257?v=4" width="100" height="100" style="border-radius: 50%; max-width: 100%;" alt="Trần Văn Mạnh" /><br />
+          <img src="https://github.com/tranvanmanh9325.png?size=150" width="120" height="120" style="border-radius: 50%; max-width: 100%;" alt="Trần Văn Mạnh" />
+          <br />
+          <br />
           <b>Trần Văn Mạnh</b>
-        </a><br />
-        <sub><a href="https://github.com/tranvanmanh9325">@tranvanmanh9325</a></sub>
+        </a>
+        <br />
+        <a href="https://github.com/tranvanmanh9325"><sub><b>@tranvanmanh9325</b></sub></a>
+        <br />
+        <br />
+        <small><b>Project Lead & System Architect</b></small>
+        <br />
+        <small><i>Hanoi University of Science & Technology</i></small>
+        <br />
+        <small>(Đại học Bách Khoa Hà Nội)</small>
+        <br />
+        <br />
+        <a href="https://github.com/tranvanmanh9325/medical-science/commits?author=tranvanmanh9325" title="Code & Architecture">💻</a>
+        <a href="https://github.com/tranvanmanh9325/medical-science/tree/main/docx" title="Scientific Research">🔬</a>
+        <a href="https://github.com/tranvanmanh9325/medical-science/tree/main/training" title="Reinforcement Learning Pipelines">🧠</a>
+        <a href="https://github.com/tranvanmanh9325/medical-science/tree/main/docx" title="Scientific Documentation">📖</a>
+        <a href="https://github.com/tranvanmanh9325/medical-science" title="Maintenance & Infrastructure">🛠️</a>
+        <a href="https://github.com/tranvanmanh9325" title="Project Founder">👑</a>
+        <br />
+        <br />
+        <a href="https://github.com/tranvanmanh9325"><img src="https://img.shields.io/github/followers/tranvanmanh9325?label=Follow%20%40tranvanmanh9325&style=social" alt="Follow on GitHub" /></a>
       </td>
-      <td valign="top">
-        <b>Project Lead, System Architect & Primary Maintainer</b><br />
-        🎓 <i>Hanoi University of Science and Technology (Đại học Bách Khoa Hà Nội)</i><br />
-        🔬 <b>Focus Areas:</b> Humanoid Robotics Architecture, Parallel RL Pipelines (JAX/MuJoCo MJX), Whole-Body Biomechanics Diagnostics, Surgical Robotics Teleoperation (dVRK/SurRoL).<br />
-        🌐 <a href="https://github.com/tranvanmanh9325"><img src="https://img.shields.io/github/followers/tranvanmanh9325?label=Follow%20%40tranvanmanh9325&style=social" alt="Follow tranvanmanh9325" /></a>
-      </td>
+      <!-- Additional contributors will be added as new <td> cells to this grid -->
     </tr>
   </tbody>
 </table>
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+<!-- ALL-CONTRIBUTORS-LIST:END -->
 
-### 🤝 Contribution Directory
+### 🌟 Becoming a Contributor
 
-| Contributor | Role | Focus Area |
-| :---: | :---: | :--- |
-| <a href="https://github.com/tranvanmanh9325"><img src="https://avatars.githubusercontent.com/u/86815257?v=4" width="48" height="48" style="border-radius: 50%;" alt="Trần Văn Mạnh" /><br />**Trần Văn Mạnh**<br />`(@tranvanmanh9325)`</a> | **Project Lead & Maintainer**<br />*(Hanoi University of Science and Technology)* | Humanoid Robotics Architecture, RL Pipelines, Biomechanics Diagnostics, dVRK Surgical Suite |
-| <a href="https://github.com/tranvanmanh9325/medical-science/graphs/contributors"><img src="https://contrib.rocks/image?repo=tranvanmanh9325/medical-science" width="80" alt="Contributors" /><br />**Open Source Community**</a> | **Contributors & Researchers** | Bug reports, feature enhancements, documentation, and model validations |
+We warmly welcome researchers, engineers, and open-source enthusiasts to join the `medical-science` initiative! When your pull request is merged, your profile will be added to the contributor grid above.
 
-We gratefully acknowledge contributions, feedback, and citations from the broader robotics and AI research communities.
+- 📖 Review the [Contribution Workflow](#-how-to-contribute) above.
+- 💡 Submit bug reports or feature proposals on our [Issue Tracker](https://github.com/tranvanmanh9325/medical-science/issues).
+- 🚀 Submit a [Pull Request](https://github.com/tranvanmanh9325/medical-science/pulls) to contribute to whole-body biomechanics, reinforcement learning pipelines, or surgical simulation suites.
+
+<p align="center">
+  <a href="https://github.com/tranvanmanh9325/medical-science/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=tranvanmanh9325/medical-science" alt="Contributors" />
+  </a>
+</p>
