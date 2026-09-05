@@ -12,18 +12,16 @@ def generate():
     username = creds.get("username", "manh090305")
 
     # =============================================================
-    # STAGE 2 v1 — WALKING & LOCOMOTION + PUSH RECOVERY
+    # STAGE 2 v4 — WALKING & LOCOMOTION (Training Dynamics Fixed)
     #
-    # Architecture decisions (expert-level):
-    #   1. Transfer learning: Stage 1 weights (105-dim) → zero-pad → 114-dim
-    #      New obs added: cmd_vel(3) + gait_phase(4) + foot_contact(2) = 9 dims
-    #   2. Single training run, full velocity range [0, 0.8 m/s]
-    #      Robot already balances from Stage 1 → velocity reward guides walking
-    #   3. Progressive push recovery: starts at 5M steps, grows to 80N at 50M steps
-    #   4. Gait Clock (CPG): 1.2 Hz alternating, sin/cos encoded → L/R synchronization
-    #   5. Action scale: 0.25 (needs larger joint excursion than Stage 1's 0.1)
-    #   6. Foot contact: site_xpos height threshold (vmap-compatible, no XML changes)
-    #   7. EPISODE_LEN = 500 steps (5s at CTRL_DT=0.01s)
+    # v3 → v4 fixes (from research agent + log analysis):
+    #   1. LR: 3e-4 → 3e-5  (fine-tuning, not training from scratch)
+    #   2. KL Early Stopping: stop epoch if approx_kl > 0.015
+    #   3. CLIP_EPS: 0.2 → 0.1  (limit policy drift per update)
+    #   4. Push: start 500K→50M steps, max 5M→150M steps, 80N→40N
+    #      (let robot learn to walk BEFORE applying pushes)
+    #   5. Weight amplification cap: ×8 → ×3  (less aggressive)
+    #   6. N_EPOCHS: 4 → 2  (fewer updates per iter = less catastrophic forgetting)
     # =============================================================
 
     TRAINING_CODE = r'''
@@ -107,11 +105,13 @@ R_FOOT_SITE_ID = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, "r_foot_f
 CONTACT_Z_THR  = 0.08  # meters — foot below 8cm = contact (swing clears ~15-20cm)
 
 # ── Push recovery curriculum ───────────────────────────────────
-# Progressive random external forces applied to pelvis (base_link body_id=1)
-PUSH_START_STEP = 500_000    # 5M env-steps before pushes start
-PUSH_MAX_STEP   = 5_000_000  # 50M steps: pushes reach full magnitude
-PUSH_MAX_FORCE  = 80.0       # N — ETH RSL standard for humanoid push robustness
-PUSH_INTERVAL   = 200        # Apply push every 2s (200 ctrl steps)
+# v4 FIX: Push AFTER robot learns to walk (50M steps), not at 500K!
+# Root cause of v3 failure: pushing 80N before robot could even walk
+# → robot learned "defensive standing" instead of walking
+PUSH_START_STEP = 50_000_000   # 50M steps — after walking is established
+PUSH_MAX_STEP   = 150_000_000  # Full 40N only at end of training
+PUSH_MAX_FORCE  = 40.0         # 40N (save 80N for Stage 3 polish)
+PUSH_INTERVAL   = 200          # Apply push every 2s (200 ctrl steps)
 
 print(f"z_nominal={Z_NOMINAL:.4f}m | action_scale={ACTION_SCALE} | step_freq={STEP_FREQ}Hz")
 print(f"OBS_DIM: {OBS_DIM_S1} (Stage1) → {OBS_DIM_S2} (Stage2: +cmd_vel+gait+contact)")
@@ -366,21 +366,22 @@ NUM_ENVS     = 4096
 ROLLOUT      = 64
 GAMMA        = 0.99
 LAM          = 0.95
-CLIP_EPS     = 0.2
-ENT_COEF     = 0.007   # Moderate — not too high (avoids frozen sigma), not too low
+CLIP_EPS     = 0.1     # v4: tighter clip → less policy drift per iter (was 0.2)
+ENT_COEF     = 0.007   # Keep moderate entropy
 VF_COEF      = 0.5
 MAX_GRAD     = 0.5
-N_EPOCHS     = 4       # PPO epochs per iteration (standard: 3-10)
-MINIBATCH    = 4096    # Mini-batch size per gradient step
+N_EPOCHS     = 2       # v4: reduce from 4 → 2 (prevent catastrophic forgetting)
+MINIBATCH    = 8192    # Larger mini-batch → fewer updates/iter (was 4096)
+KL_TARGET    = 0.015   # KL early stopping threshold (standard PPO practice)
 TOTAL_STEPS  = 150_000_000
 STEPS_PER_IT = NUM_ENVS * ROLLOUT   # 4096 × 64 = 262,144
 N_ITERS      = TOTAL_STEPS // STEPS_PER_IT  # ~572 iterations
 
-# Per-iter gradient updates: N_EPOCHS × (STEPS_PER_IT / MINIBATCH) = 4 × 64 = 256
-# Total gradient updates: 256 × 572 = ~146,432 (vs 286 before — 512× more!)
+# Per-iter gradient updates: N_EPOCHS × (STEPS_PER_IT / MINIBATCH) = 2 × 32 = 64
+# Total: 64 × 572 = 36,608 updates (controlled, not 146K like v3)
 
-# ── Amplify extension weights [105:114] to fix "deaf to cmd_vel" issue ──
-# Extension rows were near-zero (std=0.0104) → amplify to match base rows (std=0.097)
+# ── Amplify extension weights [105:114] — capped at ×3 ──────────
+# v4 FIX: ×8 was too aggressive (caused instability at iter 2). ×3 is gentler.
 import flax.traverse_util as ftu
 flat_params = ftu.flatten_dict(params, sep="/")
 w0_key = next((k for k in flat_params if "Dense_0" in k and "kernel" in k), None)
@@ -388,21 +389,20 @@ if w0_key and flat_params[w0_key].shape[0] == OBS_DIM_S2:
     W = flat_params[w0_key]
     base_std = float(W[:OBS_DIM_S1, :].std())
     ext_std  = float(W[OBS_DIM_S1:, :].std())
-    if ext_std < 0.03:  # Under-initialized extension rows
-        scale_factor = base_std / max(ext_std, 1e-6)
-        scale_factor = min(scale_factor, 8.0)  # Cap at 8× to avoid instability
+    if ext_std < 0.03:
+        scale_factor = min(base_std / max(ext_std, 1e-6), 3.0)  # Cap at ×3 (was ×8)
         W = W.at[OBS_DIM_S1:, :].multiply(scale_factor)
         flat_params[w0_key] = W
         print(f"[WEIGHT FIX] Extension rows amplified {ext_std:.4f} → {ext_std*scale_factor:.4f} (×{scale_factor:.1f})")
 params = ftu.unflatten_dict(flat_params, sep="/")
 
-# RESET optimizer state — don't inherit frozen momentum from v2 checkpoint
-# (v2's Adam momentum was biased toward zero-gradient directions)
-lr_schedule = optax.cosine_decay_schedule(3e-4, N_ITERS, alpha=0.05)
+# v4: Low LR for fine-tuning (10× smaller than v3's 3e-4)
+# Fresh optimizer state to avoid inherited momentum from Stage 1 Adam
+lr_schedule = optax.cosine_decay_schedule(3e-5, N_ITERS, alpha=0.1)  # 3e-5 → 3e-6
 tx          = optax.chain(optax.clip_by_global_norm(MAX_GRAD),
                           optax.adam(lr_schedule, eps=1e-5))
 opt_state   = tx.init(params)
-print("[OPTIMIZER] Fresh Adam state initialized (no inherited momentum from v2)")
+print(f"[OPTIMIZER] Fresh Adam state | LR=3e-5 (cosine) | CLIP={CLIP_EPS} | N_EPOCHS={N_EPOCHS}")
 
 rng_envs = jax.random.split(rng, NUM_ENVS)
 states   = jax.vmap(env_reset)(rng_envs)
@@ -458,46 +458,46 @@ def ppo_minibatch_update(params, opt_state, fo_mb, fa_mb, flp_mb, fadv_mb, fret_
         lp  = jnp.clip(-0.5 * jnp.sum(jnp.square((fa_mb - mu) / (std + 1e-8)) +
                         2.0 * ls + math.log(2.0 * math.pi), axis=-1), -10., 10.)
         ratio = jnp.exp(jnp.clip(lp - flp_mb, -5., 5.))
+        # approx_kl: average KL divergence between old and new policy
+        approx_kl = jnp.mean(0.5 * jnp.square(lp - flp_mb))
         pg    = -jnp.mean(jnp.minimum(ratio * fadv_mb,
                           jnp.clip(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * fadv_mb))
         vc    = ovf_mb + jnp.clip(v - ovf_mb, -5., 5.)
         vf    = VF_COEF * jnp.mean(jnp.maximum(jnp.square(v - fret_mb),
                                                  jnp.square(vc - fret_mb)))
         ent   = -ENT_COEF * jnp.mean(jnp.sum(ls + 0.5 * math.log(2 * math.pi * math.e), axis=-1))
-        return jnp.where(jnp.isnan(pg + vf + ent), 0.0, pg + vf + ent)
+        total = jnp.where(jnp.isnan(pg + vf + ent), 0.0, pg + vf + ent)
+        return total, approx_kl
 
-    loss, grads = jax.value_and_grad(loss_fn)(params)
+    (loss, approx_kl), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
     grads = jax.tree.map(lambda g: jnp.where(jnp.isnan(g), 0.0, g), grads)
     upd, opt_state = tx.update(grads, opt_state, params)
-    return optax.apply_updates(params, upd), opt_state, loss
-
-# Clean up stale code from old ppo_iter that was left dangling
-# (the 2 orphaned lines below were from old single-update function)
+    return optax.apply_updates(params, upd), opt_state, loss, approx_kl
 
 # ================================================================
-# 7. TRAINING LOOP — v3 with PPO Epochs + Push Recovery Curriculum
+# 7. TRAINING LOOP — v4 with PPO Epochs + KL Early Stopping
 # ================================================================
 os.makedirs("checkpoints", exist_ok=True)
 t0, cur = time.time(), 0
 
-# v3 reward thresholds (recomputed for bias-corrected reward):
+# v4 reward thresholds (bias-corrected reward):
 #   Standing still: ~0.007/step
-#   First steps:    ~0.012/step
+#   Stepping:       ~0.012/step
 #   Walking 0.2m/s: ~0.025/step
 #   Walking well:   ~0.040+/step
-WALK_THRESHOLD      = 0.018   # First real walking
-WALK_WELL_THRESHOLD = 0.032   # Walking well (tracking cmd_vel)
+WALK_THRESHOLD      = 0.018
+WALK_WELL_THRESHOLD = 0.032
 
-print(f"\nAPOLLO HUMANOID - STAGE 2 v3 (Mini-batch PPO + Bias-corrected Reward)")
+print(f"\nAPOLLO HUMANOID - STAGE 2 v4 (Fine-tuning LR + KL Stop + Delayed Push)")
 print(f"Steps/iter={STEPS_PER_IT:,} | N_iters={N_ITERS} | N_epochs={N_EPOCHS} | MBatch={MINIBATCH}")
 print(f"Gradient updates/iter: {N_EPOCHS * (STEPS_PER_IT // MINIBATCH)} | Total: {N_EPOCHS * (STEPS_PER_IT // MINIBATCH) * N_ITERS:,}")
-print(f"Transfer: {'YES (Stage 1 weights + extension amplified)' if stage1_ck else 'NO (scratch)'}")
-print(f"LR: 3e-4 (cosine decay) | ENT_COEF={ENT_COEF} | CLIP={CLIP_EPS}")
-print(f"WALK threshold: {WALK_THRESHOLD:.3f} | WALK_WELL threshold: {WALK_WELL_THRESHOLD:.3f}")
+print(f"Transfer: {'YES (Stage 1 weights + extension amplified x3)' if stage1_ck else 'NO (scratch)'}")
+print(f"LR: 3e-5 (cosine, fine-tuning) | ENT_COEF={ENT_COEF} | CLIP={CLIP_EPS} | KL_stop={KL_TARGET}")
+print(f"Push: starts {PUSH_START_STEP//1_000_000}M steps | max {PUSH_MAX_FORCE}N at {PUSH_MAX_STEP//1_000_000}M")
 print("=" * 64)
 
-CURRICULUM_P1_END = 30_000_000   # 30M: start increasing vx (earlier than v2's 50M)
-CURRICULUM_P2_END = 100_000_000  # 100M: reach full speed
+CURRICULUM_P1_END = 30_000_000   # 30M: start increasing vx
+CURRICULUM_P2_END = 100_000_000  # 100M: reach full 0.80 m/s
 
 def get_curriculum_cmd_max(n_steps):
     if n_steps < CURRICULUM_P1_END:
@@ -540,22 +540,29 @@ for it in range(1, N_ITERS + 1):
         collect_rollout(params, states, rng)
     jax.block_until_ready(fo)
 
-    # ── PPO epochs with mini-batches ────────────────────────────────
-    N_SAMPLES = fo.shape[0]  # STEPS_PER_IT = 262,144
-    N_MB = N_SAMPLES // MINIBATCH  # 64 mini-batches per epoch
+    # ── PPO epochs with mini-batches + KL Early Stopping ───────────
+    # v4: stop epoch early if policy drifts too far (approx_kl > KL_TARGET)
+    N_SAMPLES = fo.shape[0]
+    N_MB = N_SAMPLES // MINIBATCH  # 262144 / 8192 = 32 mini-batches per epoch
     last_loss = 0.0
+    kl_stopped = False
 
     for epoch in range(N_EPOCHS):
-        # Shuffle indices for each epoch (host-side, then transfer to device)
+        if kl_stopped:
+            break
         perm = np_host.random.permutation(N_SAMPLES)
         for mb_idx in range(N_MB):
             idx = perm[mb_idx * MINIBATCH:(mb_idx + 1) * MINIBATCH]
             idx_j = jnp.array(idx)
-            params, opt_state, last_loss = ppo_minibatch_update(
+            params, opt_state, last_loss, approx_kl = ppo_minibatch_update(
                 params, opt_state,
                 fo[idx_j], fa[idx_j], flp[idx_j],
                 fadv[idx_j], fret[idx_j], ovf[idx_j]
             )
+            # KL Early Stopping: if policy has drifted too far, stop this epoch
+            if float(approx_kl) > KL_TARGET:
+                kl_stopped = True
+                break
 
     jax.block_until_ready(params)
     cur += STEPS_PER_IT
@@ -579,7 +586,7 @@ for it in range(1, N_ITERS + 1):
               f"vx_max={vx_max:.2f} | t={time.time()-t0:.0f}s {status}", flush=True)
 
     if it % 50 == 0 or it == N_ITERS:
-        ck = f"checkpoints/apollo_stage2_v3_step_{cur}.npz"
+        ck = f"checkpoints/apollo_stage2_v4_step_{cur}.npz"
         flat_np = {k: np.array(v) for k, v in flax.traverse_util.flatten_dict(params, sep="/").items()}
         flat_np["_step"] = np.array(cur)
         flat_np["_it"]   = np.array(it)
@@ -590,7 +597,7 @@ for it in range(1, N_ITERS + 1):
         else:
             print(f"  -> checkpoint: {ck} ({ck_size//1024}KB)", flush=True)
 
-print("\nSTAGE 2 v3 TRAINING COMPLETE!", flush=True)
+print("\nSTAGE 2 v4 TRAINING COMPLETE!", flush=True)
 '''
 
     SETUP_CELL = [
