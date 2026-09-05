@@ -7,13 +7,14 @@
 ---
 
 ## 📑 MỤC LỤC
+
 1. [Mô hình Hóa Quá trình Quyết định Markov (MDP) cho Robot Hai Chân](#1-mô-hình-hóa-quá-trình-quyết-định-markov-mdp)
-2. [Cơ sở Lý thuyết Thuật toán Proximal Policy Optimization (PPO)](#2-cơ-sở-lý-thuyết-thuật-toán-ppo)
+2. [Cơ sở Lý thuyết Thuật toán Proximal Policy Optimization (PPO)](#2-cơ-sở-lý-thuyết-thuật-toán-proximal-policy-optimization-ppo)
 3. [Ước lượng Lợi thế Khái quát hóa (Generalized Advantage Estimation - GAE)](#3-ước-lượng-lợi-thế-khái-quát-hóa-gae)
-4. [Kỹ thuật Thiết kế Hàm Phần thưởng (Reward Engineering & Shaping)](#4-kỹ-thuật-thiết-kế-hàm-phần-thưởng)
-5. [Cơ chế Tự Động Đặt lại Trạng thái trên VRAM (Auto-Reset in Pure JAX)](#5-cơ-chế-tự-động-đặt-lại-trạng-thái-trên-vram)
-6. [Tối ưu hóa Vector hóa Phần cứng: JAX vmap & XLA JIT Compilation](#6-tối-ưu-hóa-vector-hóa-phần-cứng)
-7. [Khảo sát Thông lượng Tính toán & Định luật Mở rộng Quy mô (Scaling Laws)](#7-khảo-sát-thông-lượng-tính-toán)
+4. [Kỹ thuật Thiết kế Hàm Phần thưởng (Reward Shaping)](#4-kỹ-thuật-thiết-kế-hàm-phần-thưởng-reward-shaping)
+5. [Cơ chế Tự Động Đặt lại Trạng thái trên VRAM (Auto-Reset)](#5-cơ-chế-tự-động-đặt-lại-trạng-thái-trên-vram-auto-reset)
+6. [Tối ưu hóa Vector hóa Phần cứng: JAX vmap & XLA JIT Compilation](#6-tối-ưu-hóa-vector-hóa-phần-cứng-jax-vmap--xla-jit)
+7. [Khảo sát Thông lượng Tính toán & Định luật Mở rộng Quy mô (Scaling Laws)](#7-khảo-sát-thông-lượng-tính-toán--định-luật-mở-rộng-quy-mô)
 
 ---
 
@@ -24,6 +25,7 @@ Bài toán học thăng bằng và phục hồi tư thế đứng thẳng của 
 $$\mathcal{M} = \langle \mathcal{S}, \mathcal{A}, \mathcal{P}, \mathcal{R}, \gamma \rangle$$
 
 ### 1.1. Không Gian Trạng Thái $\mathcal{S} \subset \mathbb{R}^{105}$
+
 Trạng thái quan sát $\mathbf{s}_t \in \mathcal{S}$ được thiết kế để thỏa mãn thuộc tính Markov (trạng thái hiện tại chứa đầy đủ thông tin để dự đoán tương lai mà không cần lịch sử quá khứ):
 
 $$\mathbf{s}_t = \Big[ \mathbf{u}_z^{body} \in \mathbb{R}^3, \; \mathbf{v} \in \mathbb{R}^3, \; \boldsymbol{\omega} \in \mathbb{R}^3, \; \Delta \mathbf{q} \in \mathbb{R}^{32}, \; \dot{\mathbf{q}} \in \mathbb{R}^{32}, \; \mathbf{a}_{t-1} \in \mathbb{R}^{32} \Big]$$
@@ -31,6 +33,7 @@ $$\mathbf{s}_t = \Big[ \mathbf{u}_z^{body} \in \mathbb{R}^3, \; \mathbf{v} \in \
 - Toàn bộ các thành phần trạng thái đều được chuẩn hóa và giới hạn cắt mềm trong khoảng $[-20.0, 20.0]$ để ngăn ngừa giá trị ngoại lai (NaN / Inf) làm hỏng gradient của mạng nơ-ron.
 
 ### 1.2. Không Gian Hành Động $\mathcal{A} \subset \mathbb{R}^{32}$
+
 Hành động $\mathbf{a}_t \in [-1, 1]^{32}$ là đầu ra từ phân phối Gauss của mạng Actor. Hành động này được ánh xạ thành lệnh điều khiển vị trí hoặc mô-men danh định cho 32 khớp cơ khí:
 
 $$\mathbf{u}_{cmd} = \text{clip}\Big(\mathbf{u}_{nominal} + \alpha \cdot \mathbf{a}_t, \; \mathbf{u}_{min}, \; \mathbf{u}_{max}\Big)$$
@@ -43,7 +46,7 @@ Với hệ số tỷ lệ $\alpha = 0.3$, giới hạn độ lệch góc tối �
 
 Dự án áp dụng biến thể **PPO-Clip** (Schulman et al., 2017), thuật toán tiêu chuẩn công nghiệp trong điều khiển robot nhờ tính ổn định và khả năng tối ưu hóa mẫu cao.
 
-```
+```text
        Mạng Nơ-ron Actor-Critic
              ┌───────────┐
              │ s_t (105) │
@@ -59,6 +62,7 @@ Hành động a_t ~ N(\mu, \sigma)   Ước lượng Giá trị V_t
 ```
 
 ### 2.1. Hàm Mục Tiêu Chính Sách Cắt (Clipped Surrogate Objective)
+
 Để tránh việc bước cập nhật gradient làm thay đổi chính sách quá lớn dẫn đến sụp đổ hiệu năng (Policy Collapse), PPO giới hạn tỷ lệ xác suất $r_t(\theta)$:
 
 $$r_t(\theta) = \frac{\pi_\theta(\mathbf{a}_t \mid \mathbf{s}_t)}{\pi_{\theta_{old}}(\mathbf{a}_t \mid \mathbf{s}_t)}$$
@@ -70,11 +74,13 @@ $$\mathcal{L}^{CLIP}(\theta) = \hat{\mathbb{E}}_t \left[ \min\Big( r_t(\theta) \
 Với biên độ cắt $\epsilon = 0.2$. Khi lợi thế $\hat{A}_t > 0$ (hành động tốt hơn kỳ vọng), hàm mục tiêu bị chặn trên tại $1 + \epsilon$. Khi $\hat{A}_t < 0$ (hành động kém hơn kỳ vọng), hàm bị chặn dưới tại $1 - \epsilon$.
 
 ### 2.2. Hàm Mất Mát Toàn Phần (Total Objective Loss)
+
 Mạng Actor-Critic được tối ưu hóa đồng thời bằng hàm mất mát kết hợp:
 
 $$\mathcal{L}_{total}(\theta, \phi) = -\mathcal{L}^{CLIP}(\theta) + c_{vf} \cdot \mathcal{L}^{VF}(\phi) - c_{ent} \cdot \mathcal{S}[\pi_\theta](\mathbf{s}_t)$$
 
 Trong đó:
+
 - $\mathcal{L}^{VF}(\phi) = \hat{\mathbb{E}}_t \left[ \max\Big( (V_\phi(\mathbf{s}_t) - \hat{R}_t)^2, \; (V_{clipped}(\mathbf{s}_t) - \hat{R}_t)^2 \Big) \right]$: Hàm mất mát ước lượng giá trị của Critic có cắt tỉa biên độ.
 - $\mathcal{S}[\pi_\theta](\mathbf{s}_t) = \frac{1}{2} \sum_{i=1}^{32} \Big( 1 + \ln(2\pi) + 2\ln\sigma_i \Big)$: Độ hỗn loạn Entropy của phân phối Gauss, thúc đẩy khám phá ngẫu nhiên trong các giai đoạn đầu.
 - Trọng số cấu hình: $c_{vf} = 0.5$, $c_{ent} = 0.01$.
@@ -86,6 +92,7 @@ Trong đó:
 Ước lượng hàm lợi thế $A(s, a) = Q(s, a) - V(s)$ là chìa khóa để giảm phương sai của gradient mà không làm tăng độ lệch (bias).
 
 ### 3.1. Sai Lệch Thời Gian (Temporal Difference Error)
+
 Với bước thời gian $t$, sai lệch TD một bước $\delta_t^V$ được tính từ hàm giá trị $V_\phi$:
 
 $$\delta_t^V = r_t + \gamma V_\phi(\mathbf{s}_{t+1})(1 - d_t) - V_\phi(\mathbf{s}_t)$$
@@ -93,6 +100,7 @@ $$\delta_t^V = r_t + \gamma V_\phi(\mathbf{s}_{t+1})(1 - d_t) - V_\phi(\mathbf{s
 Trong đó $d_t \in \{0, 1\}$ là cờ báo trạng thái kết thúc (terminated).
 
 ### 3.2. Công thức Đệ Quy GAE-$\lambda$
+
 Hàm lợi thế Generalized Advantage Estimation được tính bằng tổng có trọng số mũ lùi dần từ tương lai:
 
 $$\hat{A}_t^{GAE(\gamma, \lambda)} = \sum_{l=0}^{T - t - 1} (\gamma \lambda)^l \delta_{t+l}^V$$
@@ -127,7 +135,7 @@ Thiết kế hàm thưởng cho robot hình nhân đòi hỏi sự cân bằng t
 Phần thưởng Tổng = [ Khuyến khích đứng yên ] - [ Phạt mất thăng bằng ] - [ Phạt hao phí động cơ ]
 ```
 
-### Chi Tiết Từng Số Hạng Trong Hàm Thưởng:
+### Chi Tiết Từng Số Hạng Trong Hàm Thưởng
 
 1. **Khuyến khích Triệt tiêu Vận tốc Trôi ngang ($r_{lin\_vel}$):**
    $$r_{lin\_vel} = 1.0 \cdot \exp\left( -\frac{v_x^2 + v_y^2}{0.25} \right)$$
@@ -162,6 +170,7 @@ next_step = jnp.where(done, jnp.zeros((), jnp.int32), step_new)
 ```
 
 Khi một cá thể robot bị ngã:
+
 1. `rng_reset` tự động sinh ra thế đứng ngẫu nhiên với độ nhiễu góc $\pm 10\%$ và vận tốc ban đầu nhỏ.
 2. Cây dữ liệu trạng thái `MjData` của cá thể đó lập tức được thay thế bằng trạng thái reset.
 3. Các cá thể khác trong 4.096 môi trường vẫn tiếp tục chạy bình thường mà không bị ngắt quãng.
@@ -180,7 +189,8 @@ flowchart TD
     CudaKernel --> VRAMExec["Thực thi trực tiếp trong unified VRAM (Không tốn chi phí gọi Python)"]
 ```
 
-### Các Kỹ Thuật Tối Ưu Trọng Yếu:
+### Các Kỹ Thuật Tối Ưu Trọng Yếu
+
 1. **`jax.vmap` (Vectorizing Map):** Tự động vector hóa các hàm tính toán động học đơn lẻ cho $N = 4.096$ môi trường song song, tự động gộp các phép toán ma trận thành các lệnh cuBLAS / cuDNN hiệu năng cao.
 2. **`jax.lax.scan` thay thế vòng lặp Python `for`:** Thực thi toàn bộ chuỗi 32 bước rollout trực tiếp bên trong GPU Kernel, loại bỏ hoàn toàn chi phí điều phối (Overhead) của trình thông dịch Python.
 3. **Cố định kích thước bộ nhớ đệm (Static Memory Allocation):** Thiết lập `XLA_PYTHON_CLIENT_PREALLOCATE=false` cho phép JAX chỉ sử dụng đúng lượng VRAM cần thiết (~4.2 GB trên thẻ T4), dành không gian cho bộ đệm render và các tiến trình nền.

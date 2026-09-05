@@ -28,7 +28,7 @@ You can report vulnerabilities privately and directly via GitHub:
 3. Provide a detailed summary, steps to reproduce, and any proof-of-concept (PoC) code.
 
 ### 2. Direct Maintainer Communication
-- Contact the lead maintainer directly via GitHub: [@tranvanmanh9325](https://github.com/tranvanmanh9325)
+- Contact the lead maintainer directly via GitHub: **Trần Văn Mạnh** ([@tranvanmanh9325](https://github.com/tranvanmanh9325))
 - Please include:
   - Description of the issue (e.g., buffer overflow in C-bindings, credential leakage, remote code execution risks).
   - Affected components (`main.py`, `training/`, cloud deployment scripts).

@@ -7,12 +7,13 @@
 ---
 
 ## 📑 MỤC LỤC
+
 1. [Nguồn gốc & Tiêu chuẩn Mô hình Google DeepMind Menagerie](#1-nguồn-gốc--tiêu-chuẩn-mô-hình)
 2. [Cấu trúc Cây Động học & Danh mục 37 Phân đoạn Thân (Bodies Registry)](#2-cấu-trúc-cây-động-học--danh-mục-37-phân-đoạn-thân)
 3. [Đặc tính Kỹ thuật 32 Động cơ Servo & Tỷ số Truyền](#3-đặc-tính-kỹ-thuật-32-động-cơ-servo--tỷ-số-truyền)
-4. [Mô hình Va chạm, Lưới Hình học (Geometries) & Hệ số Ma sát](#4-mô-hình-va-chạm-lưới-hình-học--hệ-số-ma-sát)
+4. [Mô hình Va chạm & Hệ số Ma sát Tiếp xúc](#4-mô-hình-va-chạm--hệ-số-ma-sát-tiếp-xúc)
 5. [Cấu hình Cảm biến Tích hợp (Sensors & Actuators Pipeline)](#5-cấu-hình-cảm-biến-tích-hợp)
-6. [Phân tích Thế Đứng Danh định (Stand Keyframe Kinematics)](#6-phân-tích-thế-đứng-danh-định)
+6. [Phân tích Thế Đứng Danh định (Stand Keyframe)](#6-phân-tích-thế-đứng-danh-định-stand-keyframe)
 
 ---
 
@@ -20,7 +21,8 @@
 
 Mô hình robot được sử dụng trong dự án được trích xuất từ kho lưu trữ chuẩn hóa quốc tế **MuJoCo Menagerie** của **Google DeepMind**, phát triển dựa trên thiết kế nguyên bản của hãng chế tạo robot **Apptronik** (Austin, Texas, Hoa Kỳ).
 
-### Các Tệp Tin Cấu Thành Chính:
+### Các Tệp Tin Cấu Thành Chính
+
 - [`google_deepmind_menagerie/apptronik_apollo/scene.xml`](file:///d:/GitHub/medical-science/google_deepmind_menagerie/apptronik_apollo/scene.xml): Tệp thế giới tổng thể định nghĩa sàn phẳng, ánh sáng định hướng, thông số tiếp xúc đàn hồi và thẻ nạp mô hình con.
 - [`google_deepmind_menagerie/apptronik_apollo/apollo.xml`](file:///d:/GitHub/medical-science/google_deepmind_menagerie/apptronik_apollo/apollo.xml): Tệp mô tả định dạng XML cho MuJoCo (MJCF) chứa cấu trúc xương khớp, các mắt xích động học, khối lượng, quán tính và giới hạn cơ khí.
 - `assets/`: Thư mục chứa các tệp lưới 3D bề mặt định dạng `.obj` siêu chi tiết và tệp kết cấu vật liệu.
@@ -73,15 +75,16 @@ Robot Apollo gồm **37 phân đoạn vật rắn (bodies)** được liên kế
 
 ---
 
-## 3. ĐẶC TÍNH KỸ THUẬT 32 ĐỘNG CƠ SERVO
+## 3. ĐẶC TÍNH KỸ THUẬT 32 ĐỘNG CƠ SERVO & TỶ SỐ TRUYỀN
 
 Hệ thống truyền động của Apollo sử dụng các động cơ điện mô-men xoắn cao kết hợp bộ giảm tốc trục vít và hộp số hành tinh hiệu suất cao:
 
-```
+```text
 [ Tín hiệu Điều khiển ] ──> [ Bộ giới hạn dải góc ctrlrange ] ──> [ Bộ khuếch đại mô-men forcerange ]
 ```
 
 ### 3.1. Các Khớp Trọng Tải Cao (High-Torque Joints)
+
 - **Khớp Háng Dang/Khép (`l_hip_aa`, `r_hip_aa`):**  
   - Giới hạn lực: **$\pm 494.0\text{ Nm}$**  
   - Vai trò: Chịu toàn bộ tải trọng lật ngang của cơ thể khi đứng trên một chân hoặc khi chịu lực xô đẩy từ cạnh bên.
@@ -95,7 +98,7 @@ Hệ thống truyền động của Apollo sử dụng các động cơ điện 
   - Giới hạn lực: **$\pm 336.0\text{ Nm}$**  
   - Dải góc: $[0.00, 2.62]\text{ rad}$ (tương đương $[0^\circ, 150^\circ]$ — gập một chiều).
 
-### 3.2. Bảng Thông Số Chi Tiết Toàn Bộ 32 Actuator:
+### 3.2. Bảng Thông Số Chi Tiết Toàn Bộ 32 Actuator
 
 | Nhóm Cơ Thể | Tên Actuator | Dải Góc Điều Khiển $[rad]$ | Giới Hạn Mô-men $[Nm]$ |
 | :--- | :--- | :---: | :---: |
@@ -137,15 +140,18 @@ Hệ thống truyền động của Apollo sử dụng các động cơ điện 
 ## 4. MÔ HÌNH VA CHẠM & HỆ SỐ MA SÁT TIẾP XÚC
 
 Mô hình gồm **80 hình học (geometries)**, chia thành 2 nhóm:
+
 1. **Visual Geoms (`group=2`):** Mắt lưới độ phân giải cao phục vụ kết xuất đồ họa quang học. Không tham gia tính toán va chạm để tiết kiệm tài nguyên GPU.
 2. **Collision Geoms (`group=3`):** Bao gồm các khối hình học cơ bản lồi (Convex Primitives: Cylinders, Boxes, Spheres, Capsules) được gắn thẻ `contype="1" conaffinity="1"`.
 
-### Cấu Hình Tương Tác Mặt Đất Chuẩn Trong `scene.xml`:
+### Cấu Hình Tương Tác Mặt Đất Chuẩn Trong `scene.xml`
+
 ```xml
 <default>
     <geom friction="0.8 0.005 0.0001" solref="0.004 1" solimp="0.9 0.95 0.001 0.5 2"/>
 </default>
 ```
+
 - **Hệ số ma sát trượt ($\mu_{sliding} = 0.8$):** Tương đương đế cao su tiếp xúc với mặt sàn gỗ hoặc bê tông nhẵn.
 - **Hệ số ma sát xoắn ($\mu_{torsional} = 0.005$):** Ngăn cản hiện tượng xoay trượt tự do quanh trục thẳng đứng.
 - **Tham số đàn hồi (`solref = [0.004, 1.0]`):** Thời gian phục hồi đàn hồi cực ngắn (4 ms) và hệ số cản tới hạn (Damping ratio = 1.0) đảm bảo bàn chân không bị nảy tưng tưng khi chạm đất.

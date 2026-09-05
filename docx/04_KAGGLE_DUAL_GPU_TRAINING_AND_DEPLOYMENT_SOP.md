@@ -107,6 +107,7 @@ os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 ### 2.2. Song song hóa Dữ liệu Đa Thiết bị (SPMD qua `jax.pmap` & `jax.vmap`)
 
 Trong Stage 2 v4, toàn bộ 4.096 môi trường được phân bố theo kiến trúc Single Program, Multiple Data (SPMD):
+
 1. **Inner Parallelism (`jax.vmap`)**: Chạy vector hóa 2.048 môi trường trên mỗi chip GPU độc lập. Tất cả các phép tính vi phân động học Newton-Euler, phát hiện va chạm lồi và bước tích phân `mjINT_IMPLICITFAST` diễn ra song song trong các thanh ghi CUDA.
 2. **Device Distribution (`jax.pmap`)**: Chia nhỏ mảng trạng thái tensor `(2, 2048, ...)` cho 2 thiết bị T4 (`cuda:0` và `cuda:1`). Các gradient của hàm mất mát PPO được đồng bộ hóa tức thời qua liên kết PCIe thông qua lệnh thu gọn tập thể `jax.lax.pmean`.
 
@@ -171,6 +172,7 @@ kaggle kernels status manh090305/apollo-humanoid-stage2-walking
 ### 4.1. Mở rộng Không gian Quan sát: Từ 105D lên 114D
 
 Trong Giai đoạn 1 (Đứng cân bằng tĩnh & Hồi phục lực xô đẩy), không gian trạng thái $\mathcal{S}_{Stage1} \in \mathbb{R}^{105}$ bao gồm:
+
 - Vector hướng chuẩn trọng trường $\mathbf{u}_{up} \in \mathbb{R}^3$ (trích xuất từ quaternion phần thân).
 - Vận tốc tịnh tiến khung gốc $\mathbf{v}_{base} \in \mathbb{R}^3$.
 - Vận tốc góc khung gốc $\boldsymbol{\omega}_{base} \in \mathbb{R}^3$.
@@ -202,6 +204,7 @@ Tổng số chiều Stage 1: $3 + 3 + 3 + 32 + 32 + 32 = 105$.
 ```
 
 #### Mã hóa Pha Nhịp bước (Phase Continuity Encoding)
+
 Để tránh điểm gián đoạn toán học tại ranh giới chu kỳ ($\phi = 0.999 \to 0.000$), pha $\phi \in [0, 1)$ được biến đổi sang tọa độ lượng giác liên tục trên đường tròn đơn vị:
 
 $$\mathbf{p}_{gait} = \begin{bmatrix} \sin(2\pi \phi) \\ \cos(2\pi \phi) \\ \sin(2\pi (\phi + 0.5)) \\ \cos(2\pi (\phi + 0.5)) \end{bmatrix} \in \mathbb{R}^4$$
@@ -242,35 +245,47 @@ if stage1_ck:
 ### 4.3. Đồng hồ Nhịp sinh học (Central Pattern Generator - CPG)
 
 Khung sinh nhịp bước đi tuân thủ chặt chẽ các chỉ số cơ sinh học của người trưởng thành:
+
 - **Tần số bước đi ($f_{step}$)**: $1.2\text{ Hz}$ (tương đương chu kỳ sải chân toàn phần $T_{cycle} = \frac{1}{1.2} \approx 0.833\text{ giây}$, mỗi bước đơn kéo dài $0.416\text{ giây}$).
 - **Tỷ lệ Chu kỳ Trụ ($D_{stance}$)**: $0.55$ (55% thời gian chân chạm đất chịu tải, 45% thời gian vung chân trên không). Tỷ lệ này tạo ra vùng hỗ trợ kép (Double Support Phase) chiếm 10% chu kỳ, đặc trưng của dáng đi người ổn định.
 
 ```mermaid
-gantt
-    title Chu Kỳ Bước Đi CPG Biomechanics (T = 0.833s | 1.2 Hz)
-    dateFormat X
-    axisFormat %s s
+flowchart TD
+    subgraph CPG["Chu Kỳ Bước Đi CPG Biomechanics (T = 0.833s | 1.2 Hz)"]
+        subgraph LeftLeg["Chân Trái (Left Leg)"]
+            L_Stance["Chân Trái Chịu Tải (Stance 55% | 0 - 458 ms)"]
+            L_Swing["Chân Trái Vung (Swing 45% | 458 - 833 ms)"]
+            L_Stance -->|Nhấc Chân| L_Swing
+            L_Swing -->|Chạm Đất| L_Stance
+        end
 
-    section Chân Trái
-    Chân Trái Chịu Tải (Stance 55%)   :active, 0, 458
-    Chân Trái Vung (Swing 45%)        :crit, 458, 833
+        subgraph RightLeg["Chân Phải (Right Leg - Lệch Pha 180 độ)"]
+            R_Swing["Chân Phải Vung (Swing 45% | 0 - 375 ms)"]
+            R_Stance["Chân Phải Chịu Tải (Stance 55% | 375 - 833 ms)"]
+            R_Swing -->|Chạm Đất| R_Stance
+            R_Stance -->|Nhấc Chân| R_Swing
+        end
 
-    section Chân Phải
-    Chân Phải Vung (Swing 45%)        :crit, 0, 375
-    Chân Phải Chịu Tải (Stance 55%)   :active, 375, 833
+        subgraph DoubleSupport["Giai Đoạn Hỗ Trợ Kép (Double Support 10%)"]
+            DS["Hai chân cùng tiếp xúc mặt đất: 375 ms - 458 ms"]
+        end
+    end
 ```
 
 ### 4.4. Giáo trình Vận tốc & Ngoại lực Đẩy (Curriculum Scheduling)
 
 Để ngăn ngừa chính sách rơi vào trạng thái cực tiểu cục bộ "đứng yên phòng thủ", hệ thống áp dụng giáo trình tăng dần theo số bước tích lũy $N_{steps}$:
 
-$$\mathbf{v}_{cmd}^{max}(N_{steps}) = \begin{cases} 
+$$
+\mathbf{v}_{cmd}^{max}(N_{steps}) = \begin{cases}
 0.15\text{ m/s}, & N_{steps} < 30\text{M} \quad (\text{Giai đoạn 1: Tập nhấc chân}) \\
 0.15 + \frac{N_{steps} - 30\text{M}}{70\text{M}} (0.80 - 0.15)\text{ m/s}, & 30\text{M} \le N_{steps} \le 100\text{M} \quad (\text{Giai đoạn 2: Tăng sải bước}) \\
 0.80\text{ m/s}, & N_{steps} > 100\text{M} \quad (\text{Giai đoạn 3: Tốc độ tối đa})
-\end{cases}$$
+\end{cases}
+$$
 
 #### Ngoại lực Xô đẩy Ngẫu nhiên (Push Disturbance Curriculum)
+
 - **$N_{steps} < 50\text{M}$**: Hoàn toàn không áp dụng lực đẩy ($F_{push} = 0\text{ N}$). Robot cần học vững cách di chuyển chân trước khi chịu va chạm.
 - **$50\text{M} \le N_{steps} \le 150\text{M}$**: Ngoại lực tăng tuyến tính từ $0\text{ N}$ lên tối đa $40\text{ N}$, tác dụng trực tiếp vào trọng tâm khung xương chậu (`pelvis`) theo các hướng ngẫu nhiên trong mặt phẳng ngang mỗi 200 bước kiểm soát ($2.0\text{ giây}$).
 
@@ -279,15 +294,16 @@ $$\mathbf{v}_{cmd}^{max}(N_{steps}) = \begin{cases}
 Trong phiên bản v2 trước đây, tổng điểm thưởng sinh tồn và duy trì tư thế đạt $1.33$, khiến robot phát hiện ra rằng việc **đứng yên một chỗ** mang lại điểm thưởng $0.017$/bước — xấp xỉ ngưỡng của việc đi bộ mạo hiểm.
 
 Hàm thưởng Stage 2 v4 tái cân bằng triệt để:
+
 1. Giảm thiểu điểm sinh tồn: $w_{alive}$ hạ từ $0.20$ xuống $0.03$.
 2. Giảm trọng số giữ thẳng: $w_{orient}$ từ $0.5$ xuống $0.15$, cho phép cơ thể lắc lư tự nhiên theo nhịp đi.
 3. Khuếch đại tín hiệu bám vận tốc tuyến tính ($w_{vel\_lin} = 5.0$) với hàm hạt nhân hẹp $\sigma^2 = 0.09$:
 
-$$r_{vel\_lin} = \exp\left(-\frac{\|\mathbf{v}_{xy} - \mathbf{v}_{cmd, xy}\|^2}{0.09}\right)$$
+   $$r_{vel\_lin} = \exp\left(-\frac{\|\mathbf{v}_{xy} - \mathbf{v}_{cmd, xy}\|^2}{0.09}\right)$$
 
-Nếu mục tiêu là $0.4\text{ m/s}$ mà robot đứng yên ($\mathbf{v}_{xy} = 0$):
-$$r_{vel\_lin} = \exp\left(-\frac{0.16}{0.09}\right) \approx 0.169 \implies 5.0 \times 0.169 = 0.845$$
-So với khi bám vận tốc thành công: $5.0 \times 1.0 = 5.0$.
+   Nếu mục tiêu là $0.4\text{ m/s}$ mà robot đứng yên ($\mathbf{v}_{xy} = 0$):
+   $$r_{vel\_lin} = \exp\left(-\frac{0.16}{0.09}\right) \approx 0.169 \implies 5.0 \times 0.169 = 0.845$$
+   So với khi bám vận tốc thành công: $5.0 \times 1.0 = 5.0$.
 
 4. Thưởng nhấc cao chân trong pha vung ($r_{foot\_clearance}$):
 Nếu chân đang ở pha vung ($1 - \text{stance\_duty}$), thưởng tỷ lệ thuận với độ cao bàn chân $z_{foot} \in [0.04\text{m}, 0.16\text{m}]$ với trọng số $+0.4$. Yếu tố này ép buộc mạng điều khiển phải thực hiện động tác gập đầu gối và nhấc bàn chân dứt khoát khỏi sàn.
@@ -302,6 +318,7 @@ Thay vì chỉ thực hiện 1 bước cập nhật gradient trên toàn bộ ba
 $$N_{minibatches} = \frac{262,144}{8,192} = 32 \text{ batches} \implies 32 \times 2 = 64 \text{ gradient updates / iteration}$$
 
 #### Cơ chế Tự ngắt Bảo vệ Chính sách (KL Early Stopping)
+
 Để tránh việc 64 bước cập nhật gradient làm dịch chuyển chính sách quá xa khỏi vùng tin cậy (Trust Region), độ lệch xấp xỉ Kullback-Leibler divergence được tính toán trên từng mini-batch:
 
 $$D_{KL}^{approx} \approx \frac{1}{M} \sum_{i=1}^{M} \frac{1}{2} \left(\log \pi_\theta(a_i|s_i) - \log \pi_{\theta_{old}}(a_i|s_i)\right)^2$$
@@ -315,6 +332,7 @@ Nếu $D_{KL}^{approx} > 0.015$, vòng lặp epoch lập tức bị ngắt (`kl_
 ### 5.1. Định dạng Tệp Checkpoint Nhị phân `.npz`
 
 Trọng số của mô hình được tuần tự hóa định kỳ mỗi 50 vòng lặp (~$13.1\text{M}$ steps) vào tệp nén nhị phân chuẩn của NumPy:
+
 - Tên tệp: `checkpoints/apollo_stage2_v4_step_{N}.npz`
 - Cấu trúc dữ liệu: Lưu trữ phẳng dạng cặp khóa-giá trị (flattened dictionary with `"/"` delimiter) tương thích với Flax Linen:
   - `params/Dense_0/kernel` $\in \mathbb{R}^{114 \times 512}$

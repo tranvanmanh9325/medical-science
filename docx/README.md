@@ -1,4 +1,5 @@
 # 📚 BỘ TÀI LIỆU KỸ THUẬT CHUYÊN SÂU DỰ ÁN MEDICAL-SCIENCE
+
 ## (Medical-Science Master Technical Documentation Suite)
 
 > **Dự án**: Nền tảng Robot Y học Đa miền Apollo & da Vinci (`medical-science`)  
@@ -48,9 +49,9 @@ graph TD
 
 ---
 
-# 🚀 HƯỚNG DẪN QUY TRÌNH & KIẾN TRÚC HUẤN LUYỆN GOOGLE COLAB
+## 🚀 HƯỚNG DẪN QUY TRÌNH & KIẾN TRÚC HUẤN LUYỆN GOOGLE COLAB
 
-## (Google Colab Automated Multi-Account Cloud Training Workflow)
+### (Google Colab Automated Multi-Account Cloud Training Workflow)
 
 > **Dự án**: Robot Hình nhân Y học Apollo (`medical-science`)  
 > **Mục tiêu tài liệu**: Chuẩn hóa toàn bộ kiến trúc đám mây, cơ chế xoay vòng tài khoản, tự động vượt hạn mức GPU (Quota Bypass / Failover), giám sát không nghẽn qua HTTP REST API và quy trình vận hành tiêu chuẩn (SOP) dành cho **AI Assistant trong các phiên làm việc mới** và **Kỹ sư phụ trách hệ thống**.

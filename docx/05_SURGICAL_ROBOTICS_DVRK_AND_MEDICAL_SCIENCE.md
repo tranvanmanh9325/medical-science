@@ -32,6 +32,7 @@
 Trong kỷ nguyên phẫu thuật mở truyền thống (Open Surgery), bác sĩ phẫu thuật phải rạch các đường mổ lớn (15 - 30 cm) để tiếp cận cơ quan nội tạng, dẫn đến tổn thương mô nghiêm trọng, mất máu nhiều, thời gian nằm viện kéo dài và nguy cơ nhiễm trùng cao.
 
 Phẫu thuật Xâm lấn Tối thiểu (Minimally Invasive Surgery - MIS / Laparoscopy) ra đời như một bước ngoặt y học: toàn bộ dụng cụ phẫu thuật và camera nội soi được đưa vào cơ thể qua các vết rạch cực nhỏ (đường kính trocar chỉ từ **5mm đến 12mm**). Tuy nhiên, phẫu thuật nội soi thủ công bằng tay gặp phải các giới hạn sinh học cố hữu của con người:
+
 1. **Hiện tượng Nghịch đảo Đòn bẩy (Fulcrum Effect)**: Tay bác sĩ di chuyển sang trái thì đầu dụng cụ bên trong cơ thể lại di chuyển sang phải; đẩy tay xuống thì đầu dụng cụ hất lên trên.
 2. **Mất bậc tự do cổ tay (Loss of Wrist Articulation)**: Dụng cụ que thẳng cứng chỉ có 4 bậc tự do thực tế, không thể bẻ cong xung quanh các mạch máu hoặc cấu trúc giải phẫu phức tạp.
 3. **Rung lắc tự nhiên của bàn tay (Hand Tremor)**: Tần số rung tự nhiên của bàn tay người ($4 - 8\text{ Hz}$, biên độ $1 - 2\text{ mm}$) có thể gây thủng rách các vi mạch máu mỏng manh.
@@ -184,6 +185,7 @@ Mỗi cánh tay Patient Side Manipulator (PSM) trong phòng mổ [`davinci_dvrk/
 Điểm đột phá kỹ thuật làm nên danh tiếng của da Vinci là công nghệ **EndoWrist**: tái lập đầy đủ độ linh hoạt của cổ tay người (7 bậc tự do hoàn chỉnh) trong một thể tích đường kính chỉ $8\text{ mm}$.
 
 Vì không gian đầu dụng cụ quá nhỏ, các động cơ điện không thể đặt trực tiếp tại các khớp ngón tay. Thay vào đó:
+
 - Động cơ điện và encoder servo được đặt tại bệ gắn dụng cụ bên ngoài cơ thể (Instrument Housing).
 - Lực truyền từ động cơ xuống các trục khớp thông qua hệ thống **dây cáp vonfram bện siêu mịn (multi-strand tungsten cables)** chạy luồn qua lòng que rỗng và quấn quanh các rãnh pulley tí hon tại cổ tay.
 - Ma trận phân phối sức căng dây cáp (Cable Tension Coupling Matrix) biến chuyển động quay của 4 đĩa truyền động ở chuôi thành các góc quay độc lập $(\theta_{roll}, \theta_{pitch}, \theta_{yaw}, \theta_{grip})$:
@@ -243,10 +245,12 @@ flowchart TD
 ### 4.2. Bài toán Gắp Vòng Chuyển Cột (FLS Peg Transfer)
 
 Trong phòng mổ mô phỏng [`davinci_dvrk/scene.xml`](file:///d:/GitHub/medical-science/davinci_dvrk/scene.xml), bàn luyện kỹ năng FLS tiêu chuẩn được bố trí bao gồm:
+
 - 4 cọc thẳng đứng đường kính $4\text{ mm}$, cao $18\text{ mm}$ đặt tại các tọa độ $x = \pm 8\text{ cm}, y = [5, 11]\text{ cm}$.
 - 3 vòng tròn chuyển cọc kích thước đường kính ngoài $12\text{ mm}$, cao $5\text{ mm}$ mang ba màu đặc trưng: Đỏ (`ring1`), Xanh dương (`ring2`), và Xanh lục (`ring3`).
 
-#### Yêu cầu Nghiệp vụ Y khoa:
+#### Yêu cầu Nghiệp vụ Y khoa
+
 1. Tay trái (PSM1) phải tiếp cận, mở má kẹp, đón và nhấc vòng đỏ khỏi cọc bên trái.
 2. Nâng vòng lên cao giữa không trung, chuyển giao vòng an toàn sang tay phải (PSM2) mà không để rơi.
 3. Tay phải luồn vòng chính xác vào cọc đích bên phải với dung sai khe hở chỉ $2\text{ mm}$.
@@ -254,6 +258,7 @@ Trong phòng mổ mô phỏng [`davinci_dvrk/scene.xml`](file:///d:/GitHub/medic
 ### 4.3. Bài toán Khâu Nối Mô Mềm Tự động (Suture Needle Manipulation)
 
 Mô hình bao gồm một khối mô mềm silicon (`suture_pad`, kích thước $10 \times 5 \times 1.5\text{ cm}$) có vết rạch mổ sâu $1.6\text{ cm}$ (`suture_incision`), cùng với một kim khâu phẫu thuật cong chuyên dụng đường kính $40\text{ mm}$ (`needle_40mm.obj`):
+
 - Kim khâu có 6 bậc tự do tự do (`<freejoint name="needle_joint"/>`) và khối lượng siêu nhẹ $5\text{ gram}$.
 - Tác tử AI phải điều khiển cánh tay PSM1 gắp chặt thân kim ở vị trí $2/3$ tính từ đầu nhọn, tính toán góc đâm vuông góc với mép vết rạch, xoay cổ tay EndoWrist theo bán kính cong của kim để luồn qua rãnh mổ, và phối hợp tay PSM2 để đón lấy đầu kim nhú ra ở bờ bên kia.
 

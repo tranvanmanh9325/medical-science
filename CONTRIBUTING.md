@@ -64,9 +64,33 @@ We actively encourage proposals for:
 
 ## 👥 Contributors & Maintainers
 
+### 🏛️ Lead Architect & Maintainer
+
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="middle" width="160">
+        <a href="https://github.com/tranvanmanh9325">
+          <img src="https://avatars.githubusercontent.com/u/86815257?v=4" width="100" height="100" style="border-radius: 50%; max-width: 100%;" alt="Trần Văn Mạnh" /><br />
+          <b>Trần Văn Mạnh</b>
+        </a><br />
+        <sub><a href="https://github.com/tranvanmanh9325">@tranvanmanh9325</a></sub>
+      </td>
+      <td valign="top">
+        <b>Project Lead, System Architect & Primary Maintainer</b><br />
+        🎓 <i>Hanoi University of Science and Technology (Đại học Bách Khoa Hà Nội)</i><br />
+        🔬 <b>Focus Areas:</b> Humanoid Robotics Architecture, Parallel RL Pipelines (JAX/MuJoCo MJX), Whole-Body Biomechanics Diagnostics, Surgical Robotics Teleoperation (dVRK/SurRoL).<br />
+        🌐 <a href="https://github.com/tranvanmanh9325"><img src="https://img.shields.io/github/followers/tranvanmanh9325?label=Follow%20%40tranvanmanh9325&style=social" alt="Follow tranvanmanh9325" /></a>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+### 🤝 Contribution Directory
+
 | Contributor | Role | Focus Area |
 | :---: | :---: | :--- |
-| **[@tranvanmanh9325](https://github.com/tranvanmanh9325)** | **Project Lead & Maintainer** | Humanoid Robotics Architecture, RL Pipelines, Biomechanics Diagnostics |
-| **Open Source Community** | **Contributors** | Bug reports, feature enhancements, documentation, and model validations |
+| <a href="https://github.com/tranvanmanh9325"><img src="https://avatars.githubusercontent.com/u/86815257?v=4" width="48" height="48" style="border-radius: 50%;" alt="Trần Văn Mạnh" /><br />**Trần Văn Mạnh**<br />`(@tranvanmanh9325)`</a> | **Project Lead & Maintainer**<br />*(Hanoi University of Science and Technology)* | Humanoid Robotics Architecture, RL Pipelines, Biomechanics Diagnostics, dVRK Surgical Suite |
+| <a href="https://github.com/tranvanmanh9325/medical-science/graphs/contributors"><img src="https://contrib.rocks/image?repo=tranvanmanh9325/medical-science" width="80" alt="Contributors" /><br />**Open Source Community**</a> | **Contributors & Researchers** | Bug reports, feature enhancements, documentation, and model validations |
 
 We gratefully acknowledge contributions, feedback, and citations from the broader robotics and AI research communities.
