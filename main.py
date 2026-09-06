@@ -1069,8 +1069,19 @@ class BlenderMuJoCoViewer:
 
         elif self.control_mode == 'PPO' and self.policy is not None:
             # ── PPO Brain AI mode ────────────────────────────────────────────
-            ctrl = self.policy.step(self.data, self.model)
-            self.data.ctrl[:] = ctrl
+            # CRITICAL FIX: policy was trained at CTRL_DT=0.01s (100Hz).
+            # Model timestep=0.005s → physics runs at 200Hz.
+            # Without decimation, policy is called at 200Hz → 2× too fast → unstable.
+            # Solution: only call policy.step() every POLICY_EVERY physics steps.
+            POLICY_EVERY = max(1, round(0.01 / self.model.opt.timestep))  # = 2 for 0.005s
+            if not hasattr(self, '_ppo_step_counter'):
+                self._ppo_step_counter = 0
+                self._ppo_last_ctrl = np.zeros(self.model.nu)
+            self._ppo_step_counter += 1
+            if self._ppo_step_counter >= POLICY_EVERY:
+                self._ppo_step_counter = 0
+                self._ppo_last_ctrl = self.policy.step(self.data, self.model)
+            self.data.ctrl[:] = self._ppo_last_ctrl
             self.data.xfrc_applied[self.root_body_id][:] = 0.0
             if np.any(push != 0.0):
                 self.data.xfrc_applied[self.root_body_id][:3] = push
