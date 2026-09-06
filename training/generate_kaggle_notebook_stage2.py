@@ -12,21 +12,27 @@ def generate():
     username = creds.get("username", "manh090305")
 
     # =============================================================
-    # STAGE 2 v6 — WALKING FROM SCRATCH (No Transfer Learning)
+    # STAGE 2 v7 — ASYMMETRIC VELOCITY REWARD + STRICT TERMINATION
     #
-    # Research agent conclusion after v2-v5 all plateau at 0.018:
-    #   ROOT CAUSE: action_scale mismatch (0.1→0.25) causes tanh saturation
-    #   → vanishing gradient → actor completely frozen despite loss updates
-    #   → Stage 1 balance policy (tiny actions) cannot produce walking motions
+    # v6 FAILURE ROOT CAUSE (from 300M step training + simulation analysis):
+    #   1. RUNAWAY VELOCITY: exp(-|v-cmd|²/σ²) is symmetric but physics is NOT.
+    #      Leaning forward uses gravity (free energy) → robot accelerates without bound.
+    #      cmd=0.3 m/s → actual vx reaches 1.57 m/s in 1.3s → robot falls.
+    #   2. log_std=0.508 for ALL 32 joints (std=1.662) → policy outputs NOISE.
+    #      ENT_COEF=0.01 was too high → entropy saturation → no learning signal.
+    #   3. TERM_TILT=cos(63°)=0.45 too lenient → robot could fall 63° before termination!
+    #      "Falling forward" was rewarded (vel + survival for ~1.3s) before penalty.
     #
-    # v6 fixes (all changes from literature: humanoid-gym, legged_gym, ETH RSL):
-    #   1. TRAIN FROM SCRATCH — no Stage 1 weight transfer
-    #   2. r_alive = 1.0 (large! prevents robot from preferring early termination)
-    #   3. r_vel_lin kernel σ: 0.25 (wide early) → 0.09 (tight late) — smooth gradient
-    #   4. Penalty weights: ×0.1 early → ×1.0 late (progressive difficulty)
-    #   5. cmd_vel curriculum: [0,0.2] → [0,0.8] → [0,1.0]
-    #   6. ROLLOUT = 24 (MJX/Isaac optimal: short horizon, fast updates)
-    #   7. LR = 1e-3 (train from scratch needs high LR, not fine-tune's 3e-5)
+    # v7 fixes (research-backed, ETH RSL + legged_gym best practices):
+    #   1. ASYMMETRIC velocity reward:
+    #      - Overshoot (v > cmd): linear penalty (-2 * error) — large gradient when far!
+    #      - Undershoot (v < cmd): exp kernel — smooth encouragement
+    #   2. ENT_COEF decay: 0.01 → 0.001 over 50M steps (force policy commitment)
+    #   3. log_std clipped: [-3.0, 0.5] in ActorCritic (prevent saturation)
+    #   4. STRICT termination: TERM_TILT=cos(25°)=0.906, TERM_HEIGHT=0.762m
+    #   5. EXPLICIT pitch penalty: p_pitch = 3.0 * upvec[1]² (directly penalize lean)
+    #   6. Termination penalty: -5.0 * CTRL_DT when fallen (no free falls!)
+    #   7. NO Stage 1 transfer (blocked completely — no code path to load it)
     # =============================================================
 
     TRAINING_CODE = r'''
@@ -93,91 +99,46 @@ default_ctrl = jnp.array(mj_model.key_qpos[key_id][7:])
 default_pose = jnp.array(mj_model.key_qpos[key_id][7:])
 
 Z_NOMINAL    = float(default_qpos[2])   # ~1.016m
-ACTION_SCALE = 0.25   # Larger than Stage 1 (0.1) — walking needs wider joint excursion
-EPISODE_LEN  = 500    # 5 seconds per episode (walking episodes can be shorter)
-TERM_HEIGHT  = Z_NOMINAL * 0.50  # Pelvis below 50% nominal = fallen
-TERM_TILT    = 0.45   # upvec_z < 0.45 ≈ body tilted > 63° = fallen
+ACTION_SCALE = 0.25
+EPISODE_LEN  = 500    # 5 seconds per episode
+# v7 STRICT termination — prevent "falling forward = free speed" exploit
+TERM_HEIGHT  = Z_NOMINAL * 0.75   # 0.762m (was 0.50 in v6 → too lenient!)
+TERM_TILT    = jnp.cos(jnp.deg2rad(25.0))  # cos(25°)=0.906 (was 0.45≈cos(63°)!)
 
-# ── Gait Clock (Central Pattern Generator) ────────────────────
-# 1.2 Hz walking cadence: 0.833s per full gait cycle (each step 0.416s)
-STEP_FREQ    = 1.2    # Hz — biologically plausible for ~73kg humanoid
-STANCE_DUTY  = 0.55   # 55% stance, 45% swing — matches human walking data
+# ── Gait Clock ────────────────────────────────────────────────
+STEP_FREQ    = 1.2    # Hz
+STANCE_DUTY  = 0.55
 
-# ── Foot contact detection via site height threshold ──────────
-# site_xpos is static-shaped → fully jax.vmap compatible (no touch sensor needed)
+# ── Foot contact ─────────────────────────────────────────────
 L_FOOT_SITE_ID = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, "l_foot_fl")
 R_FOOT_SITE_ID = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, "r_foot_fl")
-CONTACT_Z_THR  = 0.08  # meters — foot below 8cm = contact (swing clears ~15-20cm)
+CONTACT_Z_THR  = 0.08
 
-# ── Push recovery curriculum ───────────────────────────────────
-# v5: NO PUSH in Stage 2 — research confirms push causes survival mode
-# Robot must learn to walk FIRST, then we add push in Stage 3.
-# Domain randomization only: mass/friction noise added in env_reset.
-PUSH_START_STEP = 999_999_999  # Effectively disabled
+PUSH_START_STEP = 999_999_999
 PUSH_MAX_STEP   = 999_999_999
 PUSH_MAX_FORCE  = 0.0
 PUSH_INTERVAL   = 200
 
 print(f"z_nominal={Z_NOMINAL:.4f}m | action_scale={ACTION_SCALE} | step_freq={STEP_FREQ}Hz")
 print(f"OBS_DIM: {OBS_DIM_S1} (Stage1) → {OBS_DIM_S2} (Stage2: +cmd_vel+gait+contact)")
+print(f"v7: TERM_TILT=cos(25°)={float(TERM_TILT):.3f} | TERM_HEIGHT={Z_NOMINAL*0.75:.3f}m")
 
 # ================================================================
-# 3. TRANSFER LEARNING — Load Stage 1 weights, extend obs layer
+# 3. NETWORK INIT — v7: FROM SCRATCH (Block Stage 1 transfer)
 # ================================================================
-stage1_ck = None
-stage1_search_paths = [
-    # Dataset root — file uploaded directly (no subfolder)
-    "/kaggle/input/apollo-stage1-checkpoints/*.npz",
-    "/kaggle/input/apollo-stage1-v15/*.npz",
-    # Dataset with checkpoints/ subfolder
-    "/kaggle/input/apollo-stage1-checkpoints/checkpoints/*.npz",
-    "/kaggle/input/apollo-stage1-v15/checkpoints/*.npz",
-    # Any attached dataset containing npz
-    "/kaggle/input/*/*.npz",
-    "/kaggle/input/*/checkpoints/*.npz",
-    # Local fallback
-    "checkpoints_stage1/checkpoints/*.npz",
-]
-for pattern in stage1_search_paths:
-    found = sorted(glob.glob(pattern))
-    if found:
-        stage1_ck = found[-1]
-        break
+# v7 CRITICAL FIX: Stage 1 dataset was leaking into v6 despite "from scratch" intent.
+# Block transfer explicitly by NOT searching for Stage 1 checkpoints.
+# v6 failure analysis showed log_std=0.508 (std=1.662) for ALL 32 joints = noise output.
+# A real locomotion policy should have log_std ≈ -1.0 to -2.5 (std ≈ 0.08 to 0.36).
+# Root cause of v6 failure: ENT_COEF=0.01 was too high, causing entropy saturation.
+# Transfer + high entropy = policy never committed to any action → runaway velocity.
+print("[v7] NO Stage 1 transfer — training purely from scratch")
+print(f"[v7] log_std initialized to -0.5, clipped to [-3.0, 0.5]")
 
 network = ActorCritic(action_dim=nu)
 rng = jax.random.PRNGKey(42)
 rng, ri = jax.random.split(rng)
 params = network.init(ri, jnp.zeros((1, OBS_DIM_S2)))
-
-if stage1_ck:
-    print(f"\n[TRANSFER LEARNING] Loading Stage 1: {stage1_ck}")
-    s1_data = dict(np.load(stage1_ck))
-    # Flatten Stage 2 params to match structure
-    flat_s2 = flax.traverse_util.flatten_dict(params, sep="/")
-    transferred = 0
-    for k, v in flat_s2.items():
-        if k in s1_data:
-            s1_val = s1_data[k]
-            if v.shape == s1_val.shape:
-                # Exact shape match — copy directly (hidden layers, biases)
-                flat_s2[k] = jnp.array(s1_val)
-                transferred += 1
-            elif k == "params/Dense_0/kernel" and s1_val.shape == (OBS_DIM_S1, 512):
-                # Input layer: (105, 512) → (114, 512)
-                # Keep first 105 rows (Stage 1 obs), init last 9 rows small
-                new_W = np.zeros((OBS_DIM_S2, 512), dtype=np.float32)
-                new_W[:OBS_DIM_S1] = s1_val              # Stage 1 weights preserved
-                new_W[OBS_DIM_S1:] = np.random.randn(OBS_DIM_S2 - OBS_DIM_S1, 512) * 0.01
-                flat_s2[k] = jnp.array(new_W)
-                transferred += 1
-                print(f"  [OK] Input layer extended: ({OBS_DIM_S1},512) → ({OBS_DIM_S2},512)")
-    params = flax.traverse_util.unflatten_dict(flat_s2, sep="/")
-    print(f"  [OK] Transferred {transferred} parameter tensors from Stage 1")
-else:
-    print("[WARNING] Stage 1 checkpoint NOT found — training from scratch")
-    print("  To use transfer learning:")
-    print("  1. Add kaggle dataset 'apollo-stage1-checkpoints' with your Stage 1 .npz files")
-    print("  2. Or upload manually to /kaggle/working/checkpoints_stage1/checkpoints/")
 
 # ================================================================
 # 4. OBSERVATION & ENVIRONMENT
@@ -192,23 +153,19 @@ def get_upvector(qpos):
 
 def get_obs(d, prev_act, cmd_vel, phase):
     """114-dim observation: base(105) + cmd_vel(3) + gait_phase(4) + foot_contact(2)."""
-    # ── Base observation (identical to Stage 1) ────────────────
     upvec  = get_upvector(d.qpos)
     linvel = d.qvel[:3]
     angvel = d.qvel[3:6]
     jpos   = d.qpos[7:7+nu] - default_pose
     jvel   = d.qvel[6:6+nu]
 
-    # ── Gait phase clock — sin/cos for L and R legs ────────────
-    # sin/cos encoding ensures continuity at phase boundaries (0=1)
     gait_phase = jnp.array([
         jnp.sin(2.0 * math.pi * phase),
         jnp.cos(2.0 * math.pi * phase),
-        jnp.sin(2.0 * math.pi * (phase + 0.5)),   # Right leg offset by half period
+        jnp.sin(2.0 * math.pi * (phase + 0.5)),
         jnp.cos(2.0 * math.pi * (phase + 0.5)),
     ])
 
-    # ── Foot contact from site height (static shape → vmap-safe) ──
     l_z = d.site_xpos[L_FOOT_SITE_ID, 2]
     r_z = d.site_xpos[R_FOOT_SITE_ID, 2]
     foot_contact = jnp.array([
@@ -217,10 +174,8 @@ def get_obs(d, prev_act, cmd_vel, phase):
     ])
 
     obs = jnp.concatenate([
-        upvec, linvel, angvel, jpos, jvel, prev_act,  # 105 dims (Stage 1)
-        cmd_vel,                                        # +3 = 108
-        gait_phase,                                     # +4 = 112
-        foot_contact,                                   # +2 = 114
+        upvec, linvel, angvel, jpos, jvel, prev_act,
+        cmd_vel, gait_phase, foot_contact,
     ])
     return jnp.clip(obs, -20.0, 20.0)
 
@@ -236,17 +191,16 @@ def env_reset(rng):
     d  = d.replace(qpos=qpos, qvel=dv)
     d  = mjx.forward(mjx_model, d)
 
-    # ── Curriculum velocity command: start slow [0,0.15], grow to [0,0.8] ──
-    # Phase 1 (0-50M steps):  vx in [0.00, 0.15] — learn to lift feet
-    # Phase 2 (50-120M steps): vx in [0.10, 0.45] — learn to stride
-    # Phase 3 (120M+ steps):  vx in [0.00, 0.80] — full velocity range
-    # This prevents the local optimum where robot earns 0.028/step by standing still
+    # v7 curriculum: cmd_vel includes 0.0 (robot must learn to stand AND walk)
+    # Phase 0 (0-30M):  vx in [0.0, 0.25] — balance + tiny movement
+    # Phase 1 (30-100M): vx in [0.0, 0.55] — walking starts
+    # Phase 2 (100-200M): vx in [0.0, 0.85] — speed up
+    # Phase 3 (200M+):  vx in [0.0, 1.20] — full range
     cmd_vel = jax.random.uniform(
         rng_cmd, (3,),
-        minval=jnp.array([0.0,  -0.15, -0.2]),
-        maxval=jnp.array([0.15,  0.15,  0.2]),
+        minval=jnp.array([0.0,  -0.20, -0.30]),
+        maxval=jnp.array([0.25,  0.20,  0.30]),
     )
-    # Randomize initial phase — prevents all envs from being in-sync (diversity)
     phase = jax.random.uniform(rng_phase, (), minval=0.0, maxval=1.0)
     return {
         "d": d, "prev_act": jnp.zeros(nu), "step": jnp.zeros((), jnp.int32),
@@ -265,17 +219,21 @@ def env_step(state, action_and_rng):
     def _sub(dd, _): return mjx.step(mjx_model, dd), None
     d, _ = jax.lax.scan(_sub, d, None, length=N_SUBSTEPS)
 
-    # Phase advances continuously (CPG clock)
     new_phase = (phase + CTRL_DT * STEP_FREQ) % 1.0
 
-    rew     = compute_reward(d, raw_act, prev_act, cmd_vel, phase)
+    rew, done_bonus = compute_reward(d, raw_act, prev_act, cmd_vel, phase)
     obs_out = get_obs(d, raw_act, cmd_vel, new_phase)
 
     upvec      = get_upvector(d.qpos)
+    # v7 STRICT termination: tilt > 25° OR pelvis < 76.2cm
     terminated = jnp.logical_or(upvec[2] < TERM_TILT, d.qpos[2] < TERM_HEIGHT)
     step_new   = step + 1
     truncated  = step_new >= EPISODE_LEN
     done       = jnp.logical_or(terminated, truncated)
+
+    # v7: termination penalty — large negative reward when robot falls
+    # Research: without this, robot treats falling as neutral → exploits falling
+    total_rew = rew + jnp.where(terminated, -5.0 * CTRL_DT, 0.0)
 
     reset_state = env_reset(rng_reset)
     next_d     = jax.tree.map(lambda r, c: jnp.where(done, r, c), reset_state["d"], d)
@@ -286,40 +244,61 @@ def env_step(state, action_and_rng):
 
     nst = {"d": next_d, "prev_act": next_act, "step": next_step,
            "phase": next_phase, "cmd_vel": next_cmd}
-    return obs_out, nst, rew, terminated, truncated
+    return obs_out, nst, total_rew, terminated, truncated
 
 # ================================================================
-# 5. REWARD FUNCTION — v6 (From Scratch, ETH RSL / humanoid-gym style)
+# 5. REWARD FUNCTION — v7: ASYMMETRIC VELOCITY + STRICT TERMINATION
 #
-# Key changes from v3-v5:
-#   - r_alive = 1.0 (LARGE survival bonus — robot must fear falling)
-#     Research: without alive bonus, robot accepts early termination as "cheap"
-#   - r_vel_lin kernel σ: adaptive (wide=0.25 early → tight=0.09 late)
-#     Wide kernel: smooth gradient when far from target (helps early exploration)
-#     Tight kernel: precise tracking reward after basic locomotion is learned
-#   - Penalty weights: ×PENALTY_SCALE (starts 0.1 → grows to 1.0 at 100M steps)
-#     Allows robot to explore wide action space early without being crushed by penalties
-#   - r_foot_clearance weight: 0.4 (back up from 0.2 — strong foot-lift signal)
+# v6 FAILURE ANALYSIS (from simulation + research):
+#   - log_std=0.508 for ALL 32 joints → policy outputs NOISE, not actions
+#   - Runaway velocity: cmd=0.3 m/s but actual reaches 1.57 m/s in 1.3s
+#   - Root cause: exp(-|v-cmd|²/σ²) is SYMMETRIC, but leaning forward
+#     is physically ASYMMETRIC (free energy from gravity = easy acceleration)
+#   - Robot learned to lean forward (get vel reward) but never learned to brake
+#   - ENT_COEF=0.01 caused entropy saturation (policy stays random = noise)
+#
+# v7 fixes:
+#   1. ASYMMETRIC velocity reward: penalize overshoot LINEARLY (strong gradient!)
+#   2. STRICT pitch penalty: explicit penalty for pelvis pitch > 10°
+#   3. ENT_COEF decay: 0.01 → 0.001 (force policy to commit to actions)
+#   4. log_std clipped: [-3, 0.5] prevents saturation (in ActorCritic.forward)
+#   5. Termination penalty: -5.0 * CTRL_DT when robot falls (no free falls!)
 # ================================================================
-# Adaptive parameters updated outside jit (host-side)
-_VEL_SIGMA   = 0.25   # Wide kernel initially, tightened during training
-_PENALTY_SCL = 0.10   # Penalty scale: starts light, increases over time
+# Adaptive parameters updated host-side
+_VEL_SIGMA   = 0.15   # Tighter sigma from the start (no wide→tight schedule)
+_PENALTY_SCL = 0.20   # Start at 20% penalty (less aggressive than v6's 10%)
+_ENT_COEF    = 0.01   # Decays to 0.001 over first 50M steps
 
 def compute_reward(d, action, prev_action, cmd_vel, phase):
     qpos  = d.qpos
     qvel  = d.qvel
     upvec = get_upvector(qpos)
 
-    # ── PRIMARY: Velocity tracking ────────────────────────────────
-    # Adaptive σ: wide early (smoother gradient far from target), tight later
+    # ── PRIMARY: ASYMMETRIC Velocity tracking ──────────────────
+    # Research (ETH RSL, legged_gym): overshoot must be penalized LINEARLY
+    # (exp kernel has zero gradient when far → robot can't find direction to brake)
+    vx_error = qvel[0] - cmd_vel[0]   # positive = going FASTER than commanded
+    vy_error = qvel[1] - cmd_vel[1]
+    # Overshoot (v > cmd): heavy LINEAR penalty — large gradient even when far
+    # Undershoot (v < cmd): smooth exponential reward — encourage acceleration
     vel_sigma = jnp.float32(_VEL_SIGMA)
-    r_vel_lin = jnp.exp(-jnp.sum(jnp.square(qvel[:2] - cmd_vel[:2])) / vel_sigma)
+    r_vel_x = jnp.where(
+        vx_error > 0,
+        -2.0 * vx_error,                          # LINEAR penalty for overshoot
+        jnp.exp(-jnp.square(vx_error) / vel_sigma)   # EXP reward for undershoot
+    )
+    r_vel_y = jnp.exp(-jnp.square(vy_error) / vel_sigma)  # symmetric for lateral
     r_vel_ang = jnp.exp(-jnp.square(qvel[5] - cmd_vel[2]) / vel_sigma)
 
     # ── SURVIVAL + STABILITY ──────────────────────────────────────
-    r_alive  = 1.0    # v6: LARGE bonus — robot must FEAR falling (ETH RSL style)
-    r_orient = jnp.exp(-jnp.sum(jnp.square(upvec[:2])) / 0.10)
-    r_height = jnp.exp(-jnp.square(qpos[2] - Z_NOMINAL) / 0.10)
+    r_alive  = 1.0
+    r_orient = jnp.exp(-jnp.sum(jnp.square(upvec[:2])) / 0.08)
+    r_height = jnp.exp(-jnp.square(qpos[2] - Z_NOMINAL) / 0.08)
+
+    # v7: EXPLICIT PITCH PENALTY — penalize forward lean (pelvis pitch angle)
+    # upvec[1] ≈ sin(pitch) for small angles: positive = leaning forward
+    # This directly counters the "lean forward = free speed" exploit
+    p_pitch = jnp.square(upvec[1]) * 3.0  # penalty increases with lean angle
 
     # ── GAIT CLOCK + FOOT CLEARANCE ──────────────────────────────
     l_z = d.site_xpos[L_FOOT_SITE_ID, 2]
@@ -340,26 +319,24 @@ def compute_reward(d, action, prev_action, cmd_vel, phase):
     r_swing = 1.0 - r_target_stance
     l_clearance = jnp.clip((l_z - 0.04) / 0.12, 0.0, 1.0) * l_swing
     r_clearance = jnp.clip((r_z - 0.04) / 0.12, 0.0, 1.0) * r_swing
-    r_foot_clearance = (l_clearance + r_clearance) * 0.4  # v6: back to 0.4 (strong signal)
+    r_foot_clearance = (l_clearance + r_clearance) * 0.4
 
-    # ── PENALTIES (progressive scale: light early, full later) ───
+    # ── PENALTIES ────────────────────────────────────────────────
     pen_scale = jnp.float32(_PENALTY_SCL)
-    p_action_rate = pen_scale * 0.01 * jnp.mean(jnp.square(action - prev_action))
-    p_torque      = pen_scale * 1e-4 * jnp.sum(jnp.square(action))
-    p_body_tilt   = pen_scale * 0.03 * (jnp.square(qvel[3]) + jnp.square(qvel[4]))
+    p_action_rate = pen_scale * 0.02 * jnp.mean(jnp.square(action - prev_action))
+    p_torque      = pen_scale * 2e-4 * jnp.sum(jnp.square(action))
+    p_body_tilt   = pen_scale * 0.05 * (jnp.square(qvel[3]) + jnp.square(qvel[4]))
 
     # ── TOTAL ──────────────────────────────────────────────────────
-    # v6 standing still (cmd=0.3 avg): r_alive(1.0)+r_orient(0.15)+r_height(0.10)≈1.25
-    # → standing earns 0.0125/step (good! robot won't fall just to avoid penalty)
-    # Walking at 0.5m/s with cmd=0.5: r_vel_lin≈1.0×5=5.0 → total≈0.065/step
-    # → walking rewards 5× more than standing → strong gradient toward locomotion
+    # v7 standing still (cmd=0.2): r_alive+orient+height ≈ 1.25 → 0.0125/step
+    # v7 walking at cmd: r_vel_x=1.0×4 + r_alive=1 + ... ≈ 0.05+/step
     total = (
-        r_vel_lin * 5.0 + r_vel_ang * 0.5 +
+        r_vel_x * 4.0 + r_vel_y * 0.5 + r_vel_ang * 0.5 +
         r_orient * 0.15 + r_height * 0.10 + r_alive +
         r_gait + r_foot_clearance
-        - p_action_rate - p_torque - p_body_tilt
+        - p_action_rate - p_torque - p_body_tilt - p_pitch
     )
-    return jnp.maximum(0.0, total) * CTRL_DT
+    return jnp.maximum(0.0, total) * CTRL_DT, 0.0   # (reward, done_bonus placeholder)
 
 # ================================================================
 # 6. PPO ALGORITHM — v6: From Scratch (No Transfer)
@@ -390,16 +367,16 @@ N_ITERS      = TOTAL_STEPS // STEPS_PER_IT  # ~3,051 iterations
 # Research: training from scratch is easier than overcoming standing-balance local minimum.
 print(f"[v6 CONFIG] ROLLOUT={ROLLOUT} ({ROLLOUT*0.01:.2f}s/iter) | STEPS_PER_IT={STEPS_PER_IT:,}")
 print(f"[v6 CONFIG] N_EPOCHS={N_EPOCHS} | MINIBATCH={MINIBATCH} | LR=1e-3 (from scratch)")
-print(f"[v6 CONFIG] N_ITERS={N_ITERS} | TOTAL_STEPS={TOTAL_STEPS:,}")
-print(f"[v6 CONFIG] NO transfer learning — random init, full locomotion from scratch")
-print(f"[v6 CONFIG] r_alive=1.0 | sigma adaptive 0.25→0.09 | penalty scale 0.1→1.0")
+print(f"[v7 CONFIG] N_ITERS={N_ITERS} | TOTAL_STEPS={TOTAL_STEPS:,}")
+print(f"[v7 CONFIG] NO transfer, NO Stage1 leak | asymmetric velocity reward")
+print(f"[v7 CONFIG] ENT_COEF=0.01 decay to 0.001 | log_std clipped [-3, 0.5]")
 
-# v6: LR=1e-3 (cosine decay to 1e-4) — standard for RL from scratch
+# v7: LR=1e-3 (cosine decay to 1e-4)
 lr_schedule = optax.cosine_decay_schedule(1e-3, N_ITERS, alpha=0.1)  # 1e-3 → 1e-4
 tx          = optax.chain(optax.clip_by_global_norm(MAX_GRAD),
                           optax.adam(lr_schedule, eps=1e-5))
 opt_state   = tx.init(params)
-print(f"[OPTIMIZER] LR=1e-3→1e-4 (cosine) | CLIP=grad_norm {MAX_GRAD} | ENT={ENT_COEF}")
+print(f"[OPTIMIZER] LR=1e-3→1e-4 (cosine) | CLIP=grad_norm {MAX_GRAD} | ENT=0.01→0.001")
 
 rng_envs = jax.random.split(rng, NUM_ENVS)
 states   = jax.vmap(env_reset)(rng_envs)
@@ -447,7 +424,7 @@ def collect_rollout(params, states, rng):
     return fst, rng, fo, fa, flp, fadv, fret, ovf, jnp.mean(rews)
 
 @jax.jit
-def ppo_minibatch_update(params, opt_state, fo_mb, fa_mb, flp_mb, fadv_mb, fret_mb, ovf_mb):
+def ppo_minibatch_update(params, opt_state, fo_mb, fa_mb, flp_mb, fadv_mb, fret_mb, ovf_mb, ent_coef):
     """Single gradient step on one mini-batch."""
     def loss_fn(p):
         mu, ls, v = network.apply(p, fo_mb)
@@ -455,14 +432,14 @@ def ppo_minibatch_update(params, opt_state, fo_mb, fa_mb, flp_mb, fadv_mb, fret_
         lp  = jnp.clip(-0.5 * jnp.sum(jnp.square((fa_mb - mu) / (std + 1e-8)) +
                         2.0 * ls + math.log(2.0 * math.pi), axis=-1), -10., 10.)
         ratio = jnp.exp(jnp.clip(lp - flp_mb, -5., 5.))
-        # approx_kl: average KL divergence between old and new policy
         approx_kl = jnp.mean(0.5 * jnp.square(lp - flp_mb))
         pg    = -jnp.mean(jnp.minimum(ratio * fadv_mb,
                           jnp.clip(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * fadv_mb))
         vc    = ovf_mb + jnp.clip(v - ovf_mb, -5., 5.)
         vf    = VF_COEF * jnp.mean(jnp.maximum(jnp.square(v - fret_mb),
                                                  jnp.square(vc - fret_mb)))
-        ent   = -ENT_COEF * jnp.mean(jnp.sum(ls + 0.5 * math.log(2 * math.pi * math.e), axis=-1))
+        # v7: ent_coef is DYNAMIC (decays from 0.01 to 0.001)
+        ent   = -ent_coef * jnp.mean(jnp.sum(ls + 0.5 * math.log(2 * math.pi * math.e), axis=-1))
         total = jnp.where(jnp.isnan(pg + vf + ent), 0.0, pg + vf + ent)
         return total, approx_kl
 
@@ -472,44 +449,40 @@ def ppo_minibatch_update(params, opt_state, fo_mb, fa_mb, flp_mb, fadv_mb, fret_
     return optax.apply_updates(params, upd), opt_state, loss, approx_kl
 
 # ================================================================
-# 7. TRAINING LOOP — v6: From Scratch with Progressive Curriculum
+# 7. TRAINING LOOP — v7: Asymmetric Reward + ENT Decay + Strict Termination
 # ================================================================
 os.makedirs("checkpoints", exist_ok=True)
 t0, cur = time.time(), 0
 
-# v6 reward thresholds (with r_alive=1.0, scale is different)
-# Standing still: r_alive(1.0)×0.01 + r_orient×0.15×0.01 ≈ 0.011/step
-# Walking 0.3m/s: r_vel_lin×5×0.01 + alive ≈ 0.030+/step
-# Walking well:   ≈ 0.060+/step
-WALK_THRESHOLD      = 0.025   # Higher threshold (r_alive=1.0 inflates base reward)
-WALK_WELL_THRESHOLD = 0.050   # Walking well = velocity tracking + foot clearance
+# v7 reward thresholds
+WALK_THRESHOLD      = 0.020   # r_alive(1.0)×0.01 + orient ≈ 0.011/step = standing
+WALK_WELL_THRESHOLD = 0.040   # Velocity tracking working = 0.04+/step
 
-print(f"\nAPOLLO HUMANOID - STAGE 2 v6 (FROM SCRATCH)")
-print(f"Steps/iter={STEPS_PER_IT:,} | N_iters={N_ITERS} | ROLLOUT={ROLLOUT} ({ROLLOUT*0.01:.2f}s/iter)")
-print(f"NO transfer learning | r_alive=1.0 | adaptive sigma | progressive penalties")
+print(f"\nAPOLLO HUMANOID - STAGE 2 v7 (ASYMMETRIC REWARD + STRICT TERMINATION)")
+print(f"Steps/iter={STEPS_PER_IT:,} | N_iters={N_ITERS} | ROLLOUT={ROLLOUT}")
+print(f"ENT_COEF 0.01→0.001 | TERM_TILT=cos(25°) | Asymmetric vel reward")
 print("=" * 64)
 
-# v6 curriculum: start GENTLE (low cmd_vel, low speed) — robot must first learn to balance
-# then gradually increase difficulty as reward improves
-# Phase 0: 0-30M  → cmd_vel [0, 0.2] m/s (mainly balance + tiny movement)
-# Phase 1: 30-100M → cmd_vel [0, 0.5] m/s (start walking)
-# Phase 2: 100-200M → cmd_vel [0, 0.8] m/s (faster walking)
-# Phase 3: 200M+   → cmd_vel [0, 1.0] m/s (full speed)
+# v7 curriculum: cmd_vel_max grows as robot learns
+# Phase 0: 0-30M   → vx [0, 0.25] — balance + tiny movement
+# Phase 1: 30-100M  → vx [0, 0.55] — walking starts
+# Phase 2: 100-200M → vx [0, 0.85] — speed up
+# Phase 3: 200M+    → vx [0, 1.20] — full speed
 CURR_P0 = 30_000_000
 CURR_P1 = 100_000_000
 CURR_P2 = 200_000_000
 
 def get_curriculum_vx_max(n_steps):
     if n_steps < CURR_P0:
-        return 0.20
+        return 0.25
     elif n_steps < CURR_P1:
         t = (n_steps - CURR_P0) / (CURR_P1 - CURR_P0)
-        return 0.20 + t * (0.50 - 0.20)
+        return 0.25 + t * (0.55 - 0.25)
     elif n_steps < CURR_P2:
         t = (n_steps - CURR_P1) / (CURR_P2 - CURR_P1)
-        return 0.50 + t * (0.80 - 0.50)
+        return 0.55 + t * (0.85 - 0.55)
     else:
-        return 1.0
+        return 1.20
 
 @jax.jit
 def reseed_cmd_vel(states, rng, vx_max, vy_max, yaw_max):
@@ -528,17 +501,21 @@ for it in range(1, N_ITERS + 1):
     t1 = time.time()
 
     # ── Adaptive parameters (host-side, outside jit) ────────────
-    # Sigma: 0.25 (wide) → 0.09 (tight) over first 100M steps
-    global _VEL_SIGMA, _PENALTY_SCL
-    sigma_t = min(1.0, cur / 100_000_000)
-    _VEL_SIGMA   = 0.25 - sigma_t * (0.25 - 0.09)   # 0.25 → 0.09
-    _PENALTY_SCL = 0.10 + sigma_t * (1.0  - 0.10)   # 0.10 → 1.00
+    # v7: ENT_COEF decays 0.01 → 0.001 over first 50M steps (force commitment)
+    # v7: PENALTY_SCL increases 0.20 → 1.00 over 100M steps (progressive difficulty)
+    # v7: VEL_SIGMA fixed at 0.15 (tighter from start — better gradient signal)
+    global _VEL_SIGMA, _PENALTY_SCL, _ENT_COEF
+    ent_t        = min(1.0, cur / 50_000_000)
+    _ENT_COEF    = 0.01 - ent_t * (0.01 - 0.001)    # 0.01 → 0.001
+    pen_t        = min(1.0, cur / 100_000_000)
+    _PENALTY_SCL = 0.20 + pen_t * (1.0  - 0.20)     # 0.20 → 1.00
+    # _VEL_SIGMA stays fixed at 0.15 (set at init)
 
     # ── Curriculum: update cmd_vel every 20 iters ───────────────
     if it % 20 == 1:
         vx_max_cur = get_curriculum_vx_max(cur)
         vy_max_cur  = min(0.3, vx_max_cur * 0.4)
-        yaw_max_cur = min(0.4, vx_max_cur * 0.5)
+        yaw_max_cur = min(0.5, vx_max_cur * 0.5)
         rng, rng_seed = jax.random.split(rng)
         states = reseed_cmd_vel(states, rng_seed,
                                 jnp.float32(vx_max_cur),
@@ -555,6 +532,7 @@ for it in range(1, N_ITERS + 1):
     N_MB       = N_SAMPLES // MINIBATCH   # 98304 / 4096 = 24 mini-batches/epoch
     last_loss  = 0.0
     kl_stopped = False
+    ent_coef_j = jnp.float32(_ENT_COEF)  # v7: pass dynamic ent_coef to jit fn
 
     for epoch in range(N_EPOCHS):
         if kl_stopped:
@@ -566,7 +544,8 @@ for it in range(1, N_ITERS + 1):
             params, opt_state, last_loss, approx_kl = ppo_minibatch_update(
                 params, opt_state,
                 fo[idx_j], fa[idx_j], flp[idx_j],
-                fadv[idx_j], fret[idx_j], ovf[idx_j]
+                fadv[idx_j], fret[idx_j], ovf[idx_j],
+                ent_coef_j
             )
             if float(approx_kl) > KL_TARGET:
                 kl_stopped = True
@@ -582,17 +561,17 @@ for it in range(1, N_ITERS + 1):
 
         if r_val > WALK_WELL_THRESHOLD: status = "*** WALKING WELL ***"
         elif r_val > WALK_THRESHOLD:    status = "*** WALKING ***"
-        elif r_val > 0.018:             status = "stepping"
-        elif r_val > 0.013:             status = "improving"
+        elif r_val > 0.015:             status = "stepping"
+        elif r_val > 0.010:             status = "improving"
         else:                           status = "..."
 
         print(f"[{it:04d}/{N_ITERS}] steps={cur:,} | "
               f"rew={r_val:.5f} | loss={float(last_loss):.4f} | "
-              f"sps={sps:,.0f} | vx_max={vx_max_p:.2f} | sigma={_VEL_SIGMA:.3f} | "
+              f"sps={sps:,.0f} | vx_max={vx_max_p:.2f} | ent={float(_ENT_COEF):.4f} | "
               f"t={time.time()-t0:.0f}s {status}", flush=True)
 
     if it % 300 == 0 or it == N_ITERS:
-        ck = f"checkpoints/apollo_stage2_v6_step_{cur}.npz"
+        ck = f"checkpoints/apollo_stage2_v7_step_{cur}.npz"
         import flax
         flat_np = {k: np.array(v) for k, v in flax.traverse_util.flatten_dict(params, sep="/").items()}
         flat_np["_step"] = np.array(cur)
@@ -604,7 +583,13 @@ for it in range(1, N_ITERS + 1):
         else:
             print(f"  -> checkpoint: {ck} ({ck_size//1024}KB)", flush=True)
 
-print("\nSTAGE 2 v6 TRAINING COMPLETE!", flush=True)
+# Save final checkpoint as v7_final
+flat_np = {k: np.array(v) for k, v in flax.traverse_util.flatten_dict(params, sep="/").items()}
+flat_np["_step"] = np.array(cur)
+flat_np["_it"]   = np.array(it)
+np.savez("checkpoints/apollo_stage2_v7_final.npz", **flat_np)
+print("\\nSTAGE 2 v7 TRAINING COMPLETE! (Asymmetric Reward + Strict Termination)", flush=True)
+print(f"Total steps: {cur:,} | Final checkpoint: checkpoints/apollo_stage2_v7_final.npz", flush=True)
 '''
 
     SETUP_CELL = [
