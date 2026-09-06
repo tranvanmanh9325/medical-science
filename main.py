@@ -262,8 +262,25 @@ class PPOPolicyStage2(PPOPolicy):
         return np.clip(obs, -20.0, 20.0)
 
     def step(self, data, mj_model) -> np.ndarray:
-        """Step với cập nhật phase clock CPG."""
+        """Step với cập nhật phase clock CPG và velocity brake."""
+        # INFERENCE FIX: v6 policy accelerates without bound (runaway velocity bug).
+        # Root cause: exp-kernel reward is symmetric but braking is harder than accelerating.
+        # Policy learned to lean forward (= accelerate) but never to brake.
+        # Fix: if actual_vx >> cmd_vx, feed a higher effective cmd_vel to obs so policy
+        # perceives itself as NOT YET at target → slows down the lean-forward behavior.
+        # This is a standard inference-time deployment trick from legged_gym.
+        actual_vx = float(data.qvel[0])
+        effective_cmd = self.cmd_vel.copy()
+        if actual_vx > self.cmd_vel[0] + 0.15:
+            # Robot going faster than commanded: show cmd = actual (brake signal)
+            effective_cmd[0] = min(actual_vx * 0.7, self.cmd_vel[0] * 1.5)
+
+        # Temporarily inject effective cmd for this step
+        real_cmd = self.cmd_vel.copy()
+        self.cmd_vel = effective_cmd
         obs    = self.get_obs(data, mj_model)
+        self.cmd_vel = real_cmd
+
         action = self.infer(obs)
         ctrl   = self.default_pose + action * self.action_scale
         ctrl   = np.clip(ctrl, self.ctrl_range[:, 0], self.ctrl_range[:, 1])
@@ -1063,32 +1080,21 @@ class BlenderMuJoCoViewer:
             # Ngắt toàn bộ motor và ngoại lực nhân tạo
             self.data.ctrl[:] = 0.0
             self.data.xfrc_applied[self.root_body_id][:] = 0.0
-            # Vẫn có thể áp lực đẩy thử nghiệm trong lúc đang RAGDOLL
             if np.any(push != 0.0):
                 self.data.xfrc_applied[self.root_body_id][:3] = push
 
         elif self.control_mode == 'PPO' and self.policy is not None:
             # ── PPO Brain AI mode ────────────────────────────────────────────
-            # CRITICAL FIX: policy was trained at CTRL_DT=0.01s (100Hz).
-            # Model timestep=0.005s → physics runs at 200Hz.
-            # Without decimation, policy is called at 200Hz → 2× too fast → unstable.
-            # Solution: only call policy.step() every POLICY_EVERY physics steps.
-            POLICY_EVERY = max(1, round(0.01 / self.model.opt.timestep))  # = 2 for 0.005s
-            if not hasattr(self, '_ppo_step_counter'):
-                self._ppo_step_counter = 0
-                self._ppo_last_ctrl = np.zeros(self.model.nu)
-            self._ppo_step_counter += 1
-            if self._ppo_step_counter >= POLICY_EVERY:
-                self._ppo_step_counter = 0
-                self._ppo_last_ctrl = self.policy.step(self.data, self.model)
-            self.data.ctrl[:] = self._ppo_last_ctrl
+            # Training: mjx.step once per policy step at model.opt.timestep=0.005s → 200Hz.
+            # Viewer: mj_step at same 0.005s → call policy every step → MATCHES training.
+            ctrl = self.policy.step(self.data, self.model)
+            self.data.ctrl[:] = ctrl
             self.data.xfrc_applied[self.root_body_id][:] = 0.0
             if np.any(push != 0.0):
                 self.data.xfrc_applied[self.root_body_id][:3] = push
 
         else:
             # ── PD Mode: SmoothGetUpController ───────────────────────────────
-            # Đứng dậy mượt mà vật lý không teleport (Fz <= 1.25*mg, tau <= 50Nm)
             self.recovery_ctrl.step(push_force=push)
 
         mujoco.mj_step(self.model, self.data)
