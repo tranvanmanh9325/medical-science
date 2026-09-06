@@ -737,14 +737,18 @@ except Exception:
     subprocess.run(["colab", "upload", "-s", SESSION_NAME, stage1_npz, "/content/apollo_stage1_v15_step_99876864.npz"], capture_output=True)
     subprocess.run(["colab", "upload", "-s", SESSION_NAME, train_script, "/content/train_stage2.py"], capture_output=True)
 
-    # 3. Resume Checkpoint Check — Upload directly to /content/ which always exists
+    # 3. Resume Checkpoint Check
+    # v8 NOTE: Architecture changed (linear actor, sigmoid log_std) — incompatible with v2 weights.
+    # Always train from scratch for v8. Do NOT resume from apollo_stage2_v2_latest.npz.
     pull_git_latest()
-    latest_ck = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
+    latest_ck_v8 = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v8_latest.npz")
     resume_flag = ""
-    if os.path.exists(latest_ck):
-        print(f"[RELAY RESUME] Tìm thấy checkpoint trước đó: {latest_ck}", flush=True)
-        subprocess.run(["colab", "upload", "-s", SESSION_NAME, latest_ck, "/content/apollo_stage2_v2_latest.npz"], capture_output=True)
-        resume_flag = "--resume /content/apollo_stage2_v2_latest.npz"
+    if os.path.exists(latest_ck_v8):
+        print(f"[RELAY RESUME] Tìm thấy checkpoint v8: {latest_ck_v8}", flush=True)
+        subprocess.run(["colab", "upload", "-s", SESSION_NAME, latest_ck_v8, "/content/apollo_stage2_v8_latest.npz"], capture_output=True)
+        resume_flag = "--resume /content/apollo_stage2_v8_latest.npz"
+    else:
+        print(f"[RELAY] Không có checkpoint v8 — bắt đầu train từ đầu (from scratch)", flush=True)
 
     # 4. Launch training daemon
     gh_token = get_github_token()
