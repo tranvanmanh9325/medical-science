@@ -44,18 +44,34 @@ from mujoco import mjx
 import numpy as np
 
 print("=" * 64)
-print("  APOLLO HUMANOID - STAGE 2: WALKING & PUSH RECOVERY (v2)")
-print("  Velocity Curriculum + Narrow Reward Kernel + Entropy Reg")
+print("  APOLLO HUMANOID - STAGE 2: WALKING (v8)")
+print("  Unbounded Gaussian + Linear Actor + Sigmoid log_std")
 print("=" * 64)
 print("JAX Backend:", jax.default_backend())
 print("Devices:", jax.devices())
 assert jax.default_backend() in ("gpu", "tpu"), "GPU required!"
 
 # ================================================================
-# 1. ACTOR-CRITIC — extended input: 114-dim obs
+# 1. ACTOR-CRITIC — v8: Unbounded Gaussian (industry standard)
+#
+# v6/v7 CRITICAL BUG (confirmed via gradient analysis):
+#   Bug A: mean = nn.tanh(Dense(x))
+#     When tanh saturates (output = +/-1), gradient = 1 - tanh^2 ≈ 0
+#     With high std, sampled actions are always clipped to +/-1
+#     → (act - mu) = 0 → gradient through PPO loss = 0 → Dense_3 FROZEN
+#   Bug B: log_std = jnp.clip(log_std, -3.0, 0.5)
+#     Optimizer (Adam with momentum) pushes log_std to 0.5068 > 0.5
+#     jnp.clip at boundary: gradient = 0 → log_std FROZEN at 0.5068 forever
+#
+# v8 fix (legged_gym / rsl_rl industry standard):
+#   1. Linear actor output (NO tanh) → gradients always flow
+#   2. log_std bounded via sigmoid: -4 + 3 * sigmoid(param) → range [-4, -1]
+#      sigmoid always has non-zero gradient → log_std always trains
+#   3. clip(raw_action, -1, 1) only at environment boundary (not in loss!)
+#      The raw action is used for log_prob computation, clip only for ctrl
 # ================================================================
-OBS_DIM_S1 = 105   # Stage 1 observation dimension
-OBS_DIM_S2 = 114   # Stage 2: +9 dims (cmd_vel=3, gait_phase=4, foot_contact=2)
+OBS_DIM_S1 = 105
+OBS_DIM_S2 = 114
 
 class ActorCritic(nn.Module):
     action_dim: int
@@ -65,9 +81,12 @@ class ActorCritic(nn.Module):
         x = obs
         for h in (512, 256, 128):
             x = nn.elu(nn.Dense(h)(x))
-        mean    = nn.tanh(nn.Dense(self.action_dim)(x))
-        log_std = self.param("log_std", nn.initializers.constant(-0.5), (self.action_dim,))
-        log_std = jnp.clip(log_std, -3.0, 0.5)
+        # v8 FIX: Linear output (NO tanh!) — gradients always flow to Dense_3
+        mean    = nn.Dense(self.action_dim)(x)
+        # v8 FIX: Sigmoid-bounded log_std — always has gradient, range [-4, -1]
+        # -4 + 3 * sigmoid(param): param=0 → std=exp(-2.5)=0.082, param=inf → std=exp(-1)=0.37
+        ls_param = self.param("log_std", nn.initializers.constant(0.0), (self.action_dim,))
+        log_std  = -4.0 + 3.0 * nn.sigmoid(ls_param)  # range: [-4.0, -1.0]
         value   = nn.Dense(1)(x).squeeze(-1)
         return mean, log_std, value
 
@@ -352,31 +371,29 @@ NUM_ENVS     = 4096
 ROLLOUT      = 24      # v6: 128→24 (MJX/IsaacGym optimal for locomotion)
 GAMMA        = 0.99
 LAM          = 0.95
-CLIP_EPS     = 0.2     # Standard PPO clip (SOTA)
-ENT_COEF     = 0.01    # Higher entropy encourages exploration from scratch
+CLIP_EPS     = 0.2
+ENT_COEF     = 0.01
 VF_COEF      = 0.5
-MAX_GRAD     = 1.0     # Less conservative clip for from-scratch training
+MAX_GRAD     = 0.5     # v8: tighter gradient clip for unbounded Gaussian stability
 N_EPOCHS     = 4
-MINIBATCH    = 4096    # = NUM_ENVS (one minibatch = one env-iter)
-KL_TARGET    = 0.02    # Relaxed KL — more exploration allowed from scratch
-TOTAL_STEPS  = 300_000_000   # v6: 300M steps (more needed from scratch vs fine-tune)
-STEPS_PER_IT = NUM_ENVS * ROLLOUT   # 4096 × 24 = 98,304
+MINIBATCH    = 4096
+KL_TARGET    = 0.02
+TOTAL_STEPS  = 300_000_000
+STEPS_PER_IT = NUM_ENVS * ROLLOUT   # 4096 x 24 = 98,304
 N_ITERS      = TOTAL_STEPS // STEPS_PER_IT  # ~3,051 iterations
 
-# v6: NO Stage 1 weight transfer. Random Xavier init (network already initialized above).
-# Research: training from scratch is easier than overcoming standing-balance local minimum.
-print(f"[v6 CONFIG] ROLLOUT={ROLLOUT} ({ROLLOUT*0.01:.2f}s/iter) | STEPS_PER_IT={STEPS_PER_IT:,}")
-print(f"[v6 CONFIG] N_EPOCHS={N_EPOCHS} | MINIBATCH={MINIBATCH} | LR=1e-3 (from scratch)")
-print(f"[v7 CONFIG] N_ITERS={N_ITERS} | TOTAL_STEPS={TOTAL_STEPS:,}")
-print(f"[v7 CONFIG] NO transfer, NO Stage1 leak | asymmetric velocity reward")
-print(f"[v7 CONFIG] ENT_COEF=0.01 decay to 0.001 | log_std clipped [-3, 0.5]")
+print(f"[v8 CONFIG] ROLLOUT={ROLLOUT} ({ROLLOUT*0.01:.2f}s/iter) | STEPS_PER_IT={STEPS_PER_IT:,}")
+print(f"[v8 CONFIG] N_EPOCHS={N_EPOCHS} | MINIBATCH={MINIBATCH} | LR=1e-3 (from scratch)")
+print(f"[v8 CONFIG] N_ITERS={N_ITERS} | TOTAL_STEPS={TOTAL_STEPS:,}")
+print(f"[v8 CONFIG] LINEAR actor (no tanh!) | sigmoid log_std | unbounded Gaussian sampling")
+print(f"[v8 CONFIG] ENT_COEF=0.01 decay to 0.001 | MAX_GRAD=0.5 (tighter for stability)")
 
-# v7: LR=1e-3 (cosine decay to 1e-4)
-lr_schedule = optax.cosine_decay_schedule(1e-3, N_ITERS, alpha=0.1)  # 1e-3 → 1e-4
+# v8: LR=1e-3 (cosine decay to 1e-4)
+lr_schedule = optax.cosine_decay_schedule(1e-3, N_ITERS, alpha=0.1)  # 1e-3 -> 1e-4
 tx          = optax.chain(optax.clip_by_global_norm(MAX_GRAD),
                           optax.adam(lr_schedule, eps=1e-5))
 opt_state   = tx.init(params)
-print(f"[OPTIMIZER] LR=1e-3→1e-4 (cosine) | CLIP=grad_norm {MAX_GRAD} | ENT=0.01→0.001")
+print(f"[OPTIMIZER] LR=1e-3->1e-4 (cosine) | CLIP=grad_norm {MAX_GRAD} | ENT=0.01->0.001")
 
 rng_envs = jax.random.split(rng, NUM_ENVS)
 states   = jax.vmap(env_reset)(rng_envs)
@@ -391,12 +408,17 @@ def collect_rollout(params, states, rng):
         obs  = jax.vmap(lambda s: get_obs(s["d"], s["prev_act"], s["cmd_vel"], s["phase"]))(st)
         mu, ls, val = network.apply(p, obs)
         std  = jnp.exp(ls)
-        act  = jnp.clip(mu + std * jax.random.normal(ra, mu.shape), -1., 1.)
+        # v8 FIX: raw Gaussian sample (unbounded) for log_prob
+        raw_act  = mu + std * jax.random.normal(ra, mu.shape)
+        # v8 FIX: log_prob on RAW action (no clip!) - standard PPO Gaussian formula
         lp   = jnp.clip(-0.5 * jnp.sum(
-            jnp.square((act - mu) / (std + 1e-8)) +
+            jnp.square((raw_act - mu) / (std + 1e-8)) +
             2.0 * ls + math.log(2.0 * math.pi), axis=-1), -10., 10.)
-        _, nst, rew, term, trunc = jax.vmap(env_step)(st, (act, r_resets))
-        return (nst, p, r), (obs, act, lp, val, rew, term, trunc)
+        # v8 FIX: clip only for environment (prevents extreme joint movements)
+        env_act = jnp.clip(raw_act, -1., 1.)
+        _, nst, rew, term, trunc = jax.vmap(env_step)(st, (env_act, r_resets))
+        # Store raw_act in buffer for PPO loss (not clipped env_act!)
+        return (nst, p, r), (obs, raw_act, lp, val, rew, term, trunc)
 
     (fst, _, rng), traj = jax.lax.scan(
         _step, (states, params, rng), None, length=ROLLOUT)
@@ -422,6 +444,7 @@ def collect_rollout(params, states, rng):
     flat  = lambda x: x.reshape(-1, *x.shape[2:])
     fo, fa, flp, fadv, fret, ovf = *map(flat, [obs, act, old_lp, advs, rets]), flat(vals)
     return fst, rng, fo, fa, flp, fadv, fret, ovf, jnp.mean(rews)
+
 
 @jax.jit
 def ppo_minibatch_update(params, opt_state, fo_mb, fa_mb, flp_mb, fadv_mb, fret_mb, ovf_mb, ent_coef):
@@ -458,7 +481,7 @@ t0, cur = time.time(), 0
 WALK_THRESHOLD      = 0.020   # r_alive(1.0)×0.01 + orient ≈ 0.011/step = standing
 WALK_WELL_THRESHOLD = 0.040   # Velocity tracking working = 0.04+/step
 
-print(f"\nAPOLLO HUMANOID - STAGE 2 v7 (ASYMMETRIC REWARD + STRICT TERMINATION)")
+print(f"\nAPOLLO HUMANOID - STAGE 2 v8 (ASYMMETRIC REWARD + STRICT TERMINATION)")
 print(f"Steps/iter={STEPS_PER_IT:,} | N_iters={N_ITERS} | ROLLOUT={ROLLOUT}")
 print(f"ENT_COEF 0.01→0.001 | TERM_TILT=cos(25°) | Asymmetric vel reward")
 print("=" * 64)
@@ -571,7 +594,7 @@ for it in range(1, N_ITERS + 1):
               f"t={time.time()-t0:.0f}s {status}", flush=True)
 
     if it % 300 == 0 or it == N_ITERS:
-        ck = f"checkpoints/apollo_stage2_v7_step_{cur}.npz"
+        ck = f"checkpoints/apollo_stage2_v8_step_{cur}.npz"
         import flax
         flat_np = {k: np.array(v) for k, v in flax.traverse_util.flatten_dict(params, sep="/").items()}
         flat_np["_step"] = np.array(cur)
@@ -587,9 +610,9 @@ for it in range(1, N_ITERS + 1):
 flat_np = {k: np.array(v) for k, v in flax.traverse_util.flatten_dict(params, sep="/").items()}
 flat_np["_step"] = np.array(cur)
 flat_np["_it"]   = np.array(it)
-np.savez("checkpoints/apollo_stage2_v7_final.npz", **flat_np)
-print("\\nSTAGE 2 v7 TRAINING COMPLETE! (Asymmetric Reward + Strict Termination)", flush=True)
-print(f"Total steps: {cur:,} | Final checkpoint: checkpoints/apollo_stage2_v7_final.npz", flush=True)
+np.savez("checkpoints/apollo_stage2_v8_final.npz", **flat_np)
+print("\\nSTAGE 2 v8 TRAINING COMPLETE! (Asymmetric Reward + Strict Termination)", flush=True)
+print(f"Total steps: {cur:,} | Final checkpoint: checkpoints/apollo_stage2_v8_final.npz", flush=True)
 '''
 
     SETUP_CELL = [
