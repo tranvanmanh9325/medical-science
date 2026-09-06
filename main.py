@@ -907,7 +907,12 @@ class BlenderMuJoCoViewer:
                     self.policy = PPOPolicyStage2(best_ck, self.model, self.model.nu)
                     stage2_loaded = True
                     print(f"[PPO STAGE 2] Checkpoint đi bộ đã nạp thành công!")
-                    print(f"  Phím W/S: Tiến/Lùi | A/D: Sang trái/phải | Q/E: Xoay trái/phải")
+                    print(f"  Phím W/S: Tiến/Lùi | A/D: Sang trái/phải | Q/E: Xoay trái/phải | X: Dừng")
+                    # FIX: policy was trained with cmd_vel in [0,0.2]->[0,1.0] range.
+                    # cmd_vel=[0,0,0] is out-of-distribution → robot falls immediately.
+                    # Default to 0.3 m/s forward so policy starts in-distribution.
+                    self.policy.set_cmd_vel(vx=0.3, vy=0.0, yaw=0.0)
+                    print(f"  [DEFAULT CMD] vx=0.3 m/s | Nhấn W để tăng, S để giảm, X để dừng")
                 else:
                     self.policy = PPOPolicy(best_ck, self.model, self.model.nu)
                     print(f"[PPO STAGE 1] Brain AI cân bằng đã nạp! Phím B: Não AI/PD")
@@ -920,9 +925,10 @@ class BlenderMuJoCoViewer:
             print("[PPO] Chạy: python training/download_checkpoints.py")
 
         # Lệnh vận tốc từ người dùng (WASD) — chỉ dùng khi policy là Stage 2
-        self._walk_vx = 0.0   # m/s: W(+) / S(-)
-        self._walk_vy = 0.0   # m/s: D(+) / A(-)
-        self._walk_yaw = 0.0  # rad/s: E(+) / Q(-)
+        # FIX: default vx=0.3 (in-distribution) khi Stage 2 loaded, tránh OOD fall
+        self._walk_vx  = 0.3 if stage2_loaded else 0.0
+        self._walk_vy  = 0.0
+        self._walk_yaw = 0.0
         self._stage2_loaded = stage2_loaded
 
         # --- Khởi tạo Bộ Đứng Dậy Mượt Mà (Physics-Safe Soft Recovery) ---
@@ -1333,10 +1339,12 @@ class BlenderMuJoCoViewer:
 
             elif key == glfw.KEY_S:
                 if self._stage2_loaded and self.control_mode == "PPO":
-                    self._walk_vx = max(self._walk_vx - 0.1, -0.5)
+                    # FIX: clamp vx to 0.1 minimum — policy not trained below 0 (OOD → falls)
+                    # Use 0.1 as floor (allows slight slowdown while staying in-distribution)
+                    self._walk_vx = max(self._walk_vx - 0.1, 0.1)
                     if isinstance(self.policy, PPOPolicyStage2):
                         self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
-                    print(f"[ĐI BỘ] Lệnh: vx={self._walk_vx:.1f}m/s")
+                    print(f"[ĐI BỘ] Lệnh: vx={self._walk_vx:.1f}m/s (min=0.1 để tránh OOD)")
                 else:
                     self.inject_perturbation(fx=-150.0)
 
