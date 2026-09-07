@@ -711,20 +711,31 @@ def deploy_and_start_training(acc_name, is_new=True):
     else:
         ensure_session_valid(acc_name)
 
-    # 1. Install dependencies if needed
-    print("[RELAY] Kiểm tra / cài đặt thư viện (mujoco, optax, flax)...", flush=True)
+    # 1. Install dependencies — always force pin versions to avoid JAX API breakage
+    # JAX v0.11+ removed jax.core.get_opaque_trace_state used by Flax 0.11.2
+    # Pin: jax==0.4.38, jaxlib==0.4.38, flax==0.11.2, mujoco-mjx 3.2.7
+    print("[RELAY] Cài đặt thư viện với phiên bản cố định (JAX 0.4.38)...", flush=True)
     setup_code = '''
-import subprocess
-try:
-    import mujoco, optax, flax
-    print("ALL_INSTALLED")
-except Exception:
-    subprocess.check_output('pip install -q mujoco mujoco-mjx optax flax==0.11.2', shell=True, text=True)
-    print("INSTALL_OK")
+import subprocess, sys
+print("Installing pinned JAX/Flax/MJX versions...")
+r = subprocess.run([
+    sys.executable, "-m", "pip", "install", "-q", "--upgrade",
+    "jax[cuda12]==0.4.38",
+    "jaxlib==0.4.38",
+    "flax==0.11.2",
+    "optax==0.2.4",
+    "mujoco==3.2.7",
+    "mujoco-mjx==3.2.7",
+], capture_output=True, text=True)
+if r.returncode == 0:
+    import jax, flax, mujoco
+    print(f"INSTALL_OK jax={jax.__version__} flax={flax.__version__} mujoco={mujoco.__version__}")
+else:
+    print(f"INSTALL_FAILED: {r.stderr[-300:]}")
 '''
-    ok, out = safe_colab_exec(setup_code, timeout=180, retries=2, acc_name=acc_name)
-    if not ok or ("ALL_INSTALLED" not in out and "INSTALL_OK" not in out):
-        print(f"[RELAY WARNING] Cài đặt thư viện có cảnh báo ({out.strip()[:100]}), tiếp tục kiểm tra...")
+    ok, out = safe_colab_exec(setup_code, timeout=300, retries=2, acc_name=acc_name)
+    if not ok or "INSTALL_OK" not in out:
+        print(f"[RELAY WARNING] Cài đặt thư viện có cảnh báo: {out.strip()[:200]}")
 
     # 2. Upload assets
     print("[RELAY] Tải lên mô hình và mã nguồn...", flush=True)
