@@ -695,9 +695,9 @@ def deploy_and_start_training(acc_name, is_new=True):
                         return True
                     is_new = False
                 else:
-                    # Non-GPU VM was purged, retry allocating fresh GPU
-                    print(f"[RELAY] Đã giải phóng máy ảo CPU cũ, thử cấp phát lại GPU T4 trên {acc_name}...", flush=True)
-                    time.sleep(3)
+                    # Non-GPU VM was purged, wait for Google to process release, then retry
+                    print(f"[RELAY] Đã giải phóng máy ảo CPU cũ, chờ 20s cho Google xử lý trước khi cấp phát GPU T4 trên {acc_name}...", flush=True)
+                    time.sleep(20)
                     res2 = subprocess.run(["colab", "new", "-s", SESSION_NAME, "--gpu", "T4"], capture_output=True, text=True)
                     if "Session READY" in res2.stdout or "READY" in res2.stdout:
                         print(f"[RELAY OK] Phiên mới '{SESSION_NAME}' đã sẵn sàng trên {acc_name} sau khi giải phóng!", flush=True)
