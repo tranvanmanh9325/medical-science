@@ -754,7 +754,17 @@ except Exception:
     gh_token = get_github_token()
     print(f"[RELAY LAUNCH] Khởi chạy tiến trình train ngầm (Resume: {bool(resume_flag)})...", flush=True)
     launch_code = f'''
-import subprocess
+import subprocess, os, zipfile
+# Extract Apollo model into /content/mujoco_menagerie so path matches model_path in train_stage2.py
+apollo_xml = "/content/mujoco_menagerie/apptronik_apollo/scene.xml"
+if not os.path.exists(apollo_xml):
+    print("Extracting apollo_model.zip to /content/mujoco_menagerie ...")
+    os.makedirs("/content/mujoco_menagerie", exist_ok=True)
+    with zipfile.ZipFile("/content/apollo_model.zip") as z:
+        z.extractall("/content/mujoco_menagerie")
+    print(f"Extracted. XML exists: {{os.path.exists(apollo_xml)}}")
+else:
+    print(f"Apollo model already extracted: {{apollo_xml}}")
 cmd = 'GITHUB_TOKEN={gh_token} nohup python3 -u /content/train_stage2.py {resume_flag} > /content/train.log 2>&1 &'
 subprocess.Popen(cmd, shell=True, start_new_session=True)
 print('LAUNCHED_SUCCESSFULLY')
