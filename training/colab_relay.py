@@ -253,6 +253,7 @@ def sync_remote_checkpoint_rest(acc_name, log_content=None):
     Downloads the latest checkpoint and full train.log from Colab via Google HTTP REST API (ContentsClient).
     Bypasses Jupyter kernel and subprocess completely. Fast, robust, and handles binary data.
     If the remote checkpoint is newer than the local one, writes to disk and commits to GitHub.
+    v8 checkpoints are saved at /content/checkpoints/apollo_stage2_v8_latest.npz
     '''
     try:
         s = state.store.get(SESSION_NAME)
@@ -260,15 +261,20 @@ def sync_remote_checkpoint_rest(acc_name, log_content=None):
             return False
         import base64
         contents = ContentsClient(s)
+        # v8 checkpoint path (written by train_stage2.py every 300 iters)
+        remote_ckpt_path = "content/checkpoints/apollo_stage2_v8_latest.npz"
         try:
-            data = contents._request("GET", "content/checkpoints/apollo_stage2_v2_latest.npz", params={"content": "1", "format": "base64"})
+            data = contents._request("GET", remote_ckpt_path, params={"content": "1", "format": "base64"})
         except FileNotFoundError:
             refresh_session_proxy_token(acc_name)
             s = state.store.get(SESSION_NAME)
             if not s:
                 return False
             contents = ContentsClient(s)
-            data = contents._request("GET", "content/checkpoints/apollo_stage2_v2_latest.npz", params={"content": "1", "format": "base64"})
+            try:
+                data = contents._request("GET", remote_ckpt_path, params={"content": "1", "format": "base64"})
+            except FileNotFoundError:
+                return False  # No checkpoint yet — training still early
 
         raw_b64 = data.get("content")
         if not raw_b64:
@@ -277,7 +283,7 @@ def sync_remote_checkpoint_rest(acc_name, log_content=None):
         if len(ckpt_bytes) < 100_000:
             return False
 
-        local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v2_latest.npz")
+        local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v8_latest.npz")
         remote_it, remote_step = parse_npz_step_and_it(ckpt_bytes)
 
         # Check local step
@@ -305,15 +311,15 @@ def sync_remote_checkpoint_rest(acc_name, log_content=None):
             # Update history files
             update_checkpoint_history_files(acc_name, log_content)
 
-            print(f"[{get_vn_time_str()} | {acc_name}] [CHECKPOINT SYNC] Đã tải checkpoint mới từ Colab: Iter {remote_it} (Step {remote_step:,})", flush=True)
+            print(f"[{get_vn_time_str()} | {acc_name}] [CHECKPOINT SYNC] Đã tải checkpoint v8 mới từ Colab: Iter {remote_it} (Step {remote_step:,})", flush=True)
 
             files_to_sync = [
-                "colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz",
+                "colab_output/checkpoints_stage2/apollo_stage2_v8_latest.npz",
                 "colab_output/checkpoints_stage2/train.log",
                 "colab_output/checkpoints_stage2/checkpoint_history.md",
                 "colab_output/checkpoints_stage2/checkpoint_history.csv"
             ]
-            git_commit_and_push(files_to_sync, f"chore(checkpoint): sync stage 2 checkpoint [acc: {acc_name} | step: {remote_step:,} | it: {remote_it}/286]")
+            git_commit_and_push(files_to_sync, f"chore(checkpoint): sync v8 checkpoint [acc: {acc_name} | step: {remote_step:,} | it: {remote_it}/3051]")
             return True
     except Exception as e:
         print(f"[CHECKPOINT SYNC ERROR] {e}", flush=True)
@@ -926,30 +932,30 @@ def monitor_and_sync(acc_name):
                 except Exception as e:
                     print(f"[RELAY SYNC WARNING] Lỗi đồng bộ checkpoint: {e}", flush=True)
 
-            if "STAGE 2 v2 TRAINING COMPLETE!" in log_content:
+            if "STAGE 2 v8 TRAINING COMPLETE!" in log_content:
                 print("\n" + "=" * 64)
-                print("  🎉🎉🎉 HUẤN LUYỆN HOÀN TẤT 100%! CÁN ĐÍCH 150M BƯỚC! 🎉🎉🎉")
+                print("  🎉🎉🎉 HUẤN LUYỆN V8 HOÀN TẤT 100%! CÁN ĐÍCH 300M BƯỚC! 🎉🎉🎉")
                 print("=" * 64, flush=True)
                 try:
                     s = state.store.get(SESSION_NAME)
                     contents = ContentsClient(s)
-                    data = contents._request("GET", "content/checkpoints/apollo_stage2_final.npz", params={"content": "1", "format": "base64"})
+                    data = contents._request("GET", "content/checkpoints/apollo_stage2_v8_final.npz", params={"content": "1", "format": "base64"})
                     raw_b64 = data.get("content")
                     if raw_b64:
                         import base64
-                        final_local = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_final.npz")
+                        final_local = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v8_final.npz")
                         with open(final_local, "wb") as f:
                             f.write(base64.b64decode(raw_b64))
 
                     update_checkpoint_history_files(acc_name, log_content, is_final=True)
                     files_to_sync = [
-                        "colab_output/checkpoints_stage2/apollo_stage2_final.npz",
-                        "colab_output/checkpoints_stage2/apollo_stage2_v2_latest.npz",
+                        "colab_output/checkpoints_stage2/apollo_stage2_v8_final.npz",
+                        "colab_output/checkpoints_stage2/apollo_stage2_v8_latest.npz",
                         "colab_output/checkpoints_stage2/train.log",
                         "colab_output/checkpoints_stage2/checkpoint_history.md",
                         "colab_output/checkpoints_stage2/checkpoint_history.csv"
                     ]
-                    git_commit_and_push(files_to_sync, "feat(weights): save final Apollo Stage 2 trained model (150M steps) with full logs & history")
+                    git_commit_and_push(files_to_sync, "feat(weights): save final Apollo Stage 2 v8 trained model (300M steps) with full logs & history")
                 except Exception as e:
                     print(f"[FINAL CKPT ERROR] {e}", flush=True)
                 return "COMPLETE"
