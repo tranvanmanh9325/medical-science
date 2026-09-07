@@ -1043,8 +1043,29 @@ def run_relay():
         has_assignment, is_running = check_and_adopt_assignment(acc)
 
         if has_assignment and is_running:
-            print(f"[RELAY] Huấn luyện GPU đang chạy sẵn trên {acc}, gắn trực tiếp vào giám sát!", flush=True)
-            success = True
+            # Verify adopted session is running v8 code (not stale crashed session)
+            ok_log, log_txt = fetch_remote_train_log(acc)
+            is_v8 = ok_log and log_txt and any(
+                m in log_txt for m in ["v8", "APOLLO HUMANOID", "sigmoid", "linear actor", "log_std"]
+            )
+            is_crashed = ok_log and log_txt and any(
+                m in log_txt for m in ["ModuleNotFoundError", "SyntaxError", "AttributeError", "INSTALL_FAILED"]
+            )
+            if is_v8 and not is_crashed:
+                print(f"[RELAY] Huấn luyện GPU đang chạy sẵn trên {acc} (v8 xác nhận), gắn trực tiếp vào giám sát!", flush=True)
+                success = True
+            else:
+                reason = "crashed/stale" if is_crashed else "not v8 code"
+                print(f"[RELAY] Session {acc} bị lỗi hoặc không phải v8 ({reason}). Killing và redeploy...", flush=True)
+                try:
+                    assigns_now = state.client.list_assignments()
+                    for a in assigns_now:
+                        state.client.unassign(a.endpoint)
+                    print(f"[RELAY] Session cũ đã bị kill.", flush=True)
+                except Exception as ke:
+                    print(f"[RELAY] Kill failed: {ke}", flush=True)
+                time.sleep(3)
+                success = deploy_and_start_training(acc, is_new=True)
         elif has_assignment and not is_running:
             print(f"[RELAY] Máy ảo GPU {acc} đã có sẵn nhưng tiến trình đã dừng, khởi chạy lại...", flush=True)
             success = deploy_and_start_training(acc, is_new=False)
