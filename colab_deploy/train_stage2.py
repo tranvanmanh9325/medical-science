@@ -397,8 +397,7 @@ import numpy as np_host
 for it in range(1, N_ITERS + 1):
     t1 = time.time()
 
-    # Adaptive parameters (host-side, outside jit)
-    global _VEL_SIGMA, _PENALTY_SCL, _ENT_COEF
+    # Adaptive parameters (host-side, outside jit) — update module-level vars
     ent_t        = min(1.0, cur / 50_000_000)
     _ENT_COEF    = 0.01 - ent_t * (0.01 - 0.001)    # 0.01 -> 0.001
     pen_t        = min(1.0, cur / 100_000_000)
