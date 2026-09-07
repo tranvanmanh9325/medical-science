@@ -473,17 +473,22 @@ for it in range(1, N_ITERS + 1):
         else:
             print(f"  -> checkpoint: {ck} ({ck_size//1024}KB)", flush=True)
 
+        # Always create _latest.npz locally for relay HTTP sync (independent of GitHub)
+        latest_ck = f"{CKPT_DIR}/apollo_stage2_v8_latest.npz"
+        import shutil as _shutil
+        _shutil.copy(ck, latest_ck)
+        print(f"  -> latest: {latest_ck}", flush=True)
+
         # Push checkpoint to GitHub via REST API (no git clone needed)
         gh_token = os.environ.get("GITHUB_TOKEN", "")
         if gh_token:
             try:
                 import base64, urllib.request, json as _json
                 repo = "tranvanmanh9325/medical-science"
-                api_path = f"colab_output/checkpoints_stage2/apollo_stage2_v8_latest.npz"
+                api_path = "colab_output/checkpoints_stage2/apollo_stage2_v8_latest.npz"
                 api_url = f"https://api.github.com/repos/{repo}/contents/{api_path}"
-                with open(ck, "rb") as f:
+                with open(latest_ck, "rb") as f:
                     ck_b64 = base64.b64encode(f.read()).decode()
-                # Get current SHA (if file exists) for update
                 sha = None
                 try:
                     req_get = urllib.request.Request(api_url, headers={"Authorization": f"token {gh_token}", "User-Agent": "ColabTrainer"})
@@ -491,15 +496,22 @@ for it in range(1, N_ITERS + 1):
                         sha = _json.loads(r.read())["sha"]
                 except Exception:
                     pass
-                payload = {"message": f"[skip ci] checkpoint step={cur}", "content": ck_b64, "branch": "main"}
+                payload = {"message": f"[skip ci] checkpoint step={cur} it={it}", "content": ck_b64, "branch": "main"}
                 if sha:
                     payload["sha"] = sha
-                req_put = urllib.request.Request(api_url, data=_json.dumps(payload).encode(), headers={"Authorization": f"token {gh_token}", "Content-Type": "application/json", "User-Agent": "CoLabTrainer"}, method="PUT")
-                with urllib.request.urlopen(req_put, timeout=60) as r:
+                req_put = urllib.request.Request(
+                    api_url,
+                    data=_json.dumps(payload).encode(),
+                    headers={"Authorization": f"token {gh_token}", "Content-Type": "application/json", "User-Agent": "ColabTrainer"},
+                    method="PUT"
+                )
+                with urllib.request.urlopen(req_put, timeout=120) as r:
                     r.read()
-                print(f"  -> GitHub push OK via REST API (step={cur})", flush=True)
+                print(f"  -> GitHub REST API push OK (step={cur})", flush=True)
             except Exception as e:
                 print(f"  [WARN] GitHub push failed: {e}", flush=True)
+        else:
+            print("  [WARN] No GITHUB_TOKEN — skipping GitHub push", flush=True)
 
 # Final checkpoint
 flat_np = {k: np.array(v) for k, v in flax.traverse_util.flatten_dict(params, sep="/").items()}
