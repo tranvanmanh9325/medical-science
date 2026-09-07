@@ -702,15 +702,25 @@ def deploy_and_start_training(acc_name, is_new=True):
                     if "Session READY" in res2.stdout or "READY" in res2.stdout:
                         print(f"[RELAY OK] Phiên mới '{SESSION_NAME}' đã sẵn sàng trên {acc_name} sau khi giải phóng!", flush=True)
                         colab_pool.save_account_sessions(acc_name)
+                else:
+                    err2 = res2.stderr or res2.stdout
+                    if "Service Unavailable" in err2 or "503" in err2:
+                        # Google rate limiting — don't mark cooldown, just skip this account for now
+                        print(f"[RELAY] account {acc_name}: Google tạm thời không cấp GPU (Service Unavailable), bỏ qua không phạt cooldown.", flush=True)
                     else:
                         colab_pool.mark_account_exhausted(acc_name, hours=1)
-                        return False
+                    return False
             elif "503" in err or "ResourceExhausted" in err:
                 # Real GPU quota limit — need to wait for Google to reset
                 colab_pool.mark_account_exhausted(acc_name, hours=12)
                 return False
-            elif "Service Unavailable" in err or "outcome" in err:
-                # Transient error — short cooldown, retry soon
+            elif "Service Unavailable" in err:
+                # Transient rate limiting on first attempt — short cooldown
+                print(f"[RELAY] account {acc_name}: Google Service Unavailable (rate limit), thử lại sau 15 phút.", flush=True)
+                colab_pool.mark_account_exhausted(acc_name, hours=0.25)
+                return False
+            elif "outcome" in err:
+                # Other transient error
                 colab_pool.mark_account_exhausted(acc_name, hours=0.5)
                 return False
             else:
