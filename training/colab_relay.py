@@ -711,31 +711,39 @@ def deploy_and_start_training(acc_name, is_new=True):
     else:
         ensure_session_valid(acc_name)
 
-    # 1. Install dependencies — always force pin versions to avoid JAX API breakage
-    # JAX v0.11+ removed jax.core.get_opaque_trace_state used by Flax 0.11.2
-    # Pin: jax==0.4.38, jaxlib==0.4.38, flax==0.11.2, mujoco-mjx 3.2.7
-    print("[RELAY] Cài đặt thư viện với phiên bản cố định (JAX 0.4.38)...", flush=True)
+    # 1. Install dependencies — latest mujoco-mjx is fixed for JAX 0.11+
+    # Strategy: upgrade mujoco-mjx to latest (has JAX 0.11 compatibility fix),
+    # then let pip resolve compatible JAX/Flax automatically.
+    print("[RELAY] Cài đặt thư viện mujoco-mjx + JAX + Flax (latest compat)...", flush=True)
     setup_code = '''
 import subprocess, sys
-print("Installing pinned JAX/Flax/MJX versions...")
-r = subprocess.run([
+print("Installing mujoco-mjx + JAX + Flax (latest compatible)...")
+# Step 1: Install mujoco + mujoco-mjx first (lets pip pick compatible JAX)
+r1 = subprocess.run([
     sys.executable, "-m", "pip", "install", "-q", "--upgrade",
-    "jax[cuda12]==0.4.38",
-    "jaxlib==0.4.38",
-    "flax==0.11.2",
-    "optax==0.2.4",
-    "mujoco==3.2.7",
-    "mujoco-mjx==3.2.7",
+    "mujoco", "mujoco-mjx",
 ], capture_output=True, text=True)
-if r.returncode == 0:
+# Step 2: Install JAX with CUDA 12 support (T4 uses CUDA 12)
+r2 = subprocess.run([
+    sys.executable, "-m", "pip", "install", "-q", "--upgrade",
+    "jax[cuda12_pip]", "flax", "optax",
+    "-f", "https://storage.googleapis.com/jax-releases/jax_cuda_releases.html",
+], capture_output=True, text=True)
+if r1.returncode == 0 and r2.returncode == 0:
     import jax, flax, mujoco
+    # Quick sanity: import jax.core and mujoco.mjx to verify no deprecated API
+    from mujoco import mjx as _mjx_test
     print(f"INSTALL_OK jax={jax.__version__} flax={flax.__version__} mujoco={mujoco.__version__}")
 else:
-    print(f"INSTALL_FAILED: {r.stderr[-300:]}")
+    errs = (r1.stderr + r2.stderr)[-400:]
+    print(f"INSTALL_FAILED: {errs}")
 '''
-    ok, out = safe_colab_exec(setup_code, timeout=300, retries=2, acc_name=acc_name)
+    ok, out = safe_colab_exec(setup_code, timeout=420, retries=1, acc_name=acc_name)
     if not ok or "INSTALL_OK" not in out:
-        print(f"[RELAY WARNING] Cài đặt thư viện có cảnh báo: {out.strip()[:200]}")
+        print(f"[RELAY ERROR] Install thất bại, không thể deploy: {out.strip()[-300:]}", flush=True)
+        return False
+    print(f"[RELAY] {[l for l in out.splitlines() if 'INSTALL_OK' in l][0]}", flush=True)
+
 
     # 2. Upload assets
     print("[RELAY] Tải lên mô hình và mã nguồn...", flush=True)
