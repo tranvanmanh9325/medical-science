@@ -473,24 +473,31 @@ for it in range(1, N_ITERS + 1):
         else:
             print(f"  -> checkpoint: {ck} ({ck_size//1024}KB)", flush=True)
 
-        # Git push to GitHub for persistent storage (failover recovery)
+        # Push checkpoint to GitHub via REST API (no git clone needed)
         gh_token = os.environ.get("GITHUB_TOKEN", "")
         if gh_token:
             try:
-                import subprocess
-                repo_url = f"https://x-access-token:{gh_token}@github.com/tranvanmanh9325/medical-science.git"
-                dest = f"/content/ckpt_sync/apollo_stage2_v8_step_{cur}.npz"
-                os.makedirs("/content/ckpt_sync", exist_ok=True)
-                import shutil; shutil.copy(ck, dest)
-                subprocess.run(["git", "config", "user.email", "colab@train.local"], cwd="/content/medical-science", capture_output=True)
-                subprocess.run(["git", "config", "user.name", "Colab Trainer"], cwd="/content/medical-science", capture_output=True)
-                dst_repo = f"/content/medical-science/colab_output/checkpoints_stage2"
-                os.makedirs(dst_repo, exist_ok=True)
-                shutil.copy(ck, f"{dst_repo}/apollo_stage2_v8_latest.npz")
-                subprocess.run(["git", "add", "-A"], cwd="/content/medical-science", capture_output=True)
-                subprocess.run(["git", "commit", "--allow-empty", "-m", f"[skip ci] checkpoint step={cur}"], cwd="/content/medical-science", capture_output=True)
-                subprocess.run(["git", "push", repo_url, "main"], cwd="/content/medical-science", capture_output=True, timeout=60)
-                print(f"  -> GitHub push OK (step={cur})", flush=True)
+                import base64, urllib.request, json as _json
+                repo = "tranvanmanh9325/medical-science"
+                api_path = f"colab_output/checkpoints_stage2/apollo_stage2_v8_latest.npz"
+                api_url = f"https://api.github.com/repos/{repo}/contents/{api_path}"
+                with open(ck, "rb") as f:
+                    ck_b64 = base64.b64encode(f.read()).decode()
+                # Get current SHA (if file exists) for update
+                sha = None
+                try:
+                    req_get = urllib.request.Request(api_url, headers={"Authorization": f"token {gh_token}", "User-Agent": "ColabTrainer"})
+                    with urllib.request.urlopen(req_get, timeout=15) as r:
+                        sha = _json.loads(r.read())["sha"]
+                except Exception:
+                    pass
+                payload = {"message": f"[skip ci] checkpoint step={cur}", "content": ck_b64, "branch": "main"}
+                if sha:
+                    payload["sha"] = sha
+                req_put = urllib.request.Request(api_url, data=_json.dumps(payload).encode(), headers={"Authorization": f"token {gh_token}", "Content-Type": "application/json", "User-Agent": "CoLabTrainer"}, method="PUT")
+                with urllib.request.urlopen(req_put, timeout=60) as r:
+                    r.read()
+                print(f"  -> GitHub push OK via REST API (step={cur})", flush=True)
             except Exception as e:
                 print(f"  [WARN] GitHub push failed: {e}", flush=True)
 
