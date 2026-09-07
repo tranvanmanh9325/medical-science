@@ -695,20 +695,40 @@ def deploy_and_start_training(acc_name, is_new=True):
                         return True
                     is_new = False
                 else:
-                    # Non-GPU VM was purged, wait for Google to process release, then retry
-                    print(f"[RELAY] Đã giải phóng máy ảo CPU cũ, chờ 20s cho Google xử lý trước khi cấp phát GPU T4 trên {acc_name}...", flush=True)
-                    time.sleep(20)
-                    res2 = subprocess.run(["colab", "new", "-s", SESSION_NAME, "--gpu", "T4"], capture_output=True, text=True)
-                    if "Session READY" in res2.stdout or "READY" in res2.stdout:
-                        print(f"[RELAY OK] Phiên mới '{SESSION_NAME}' đã sẵn sàng trên {acc_name} sau khi giải phóng!", flush=True)
-                        colab_pool.save_account_sessions(acc_name)
-                    else:
+                    # CPU VM purged — use exponential backoff retry (Google needs time to release slot)
+                    # Based on research: 503 Service Unavailable is transient rate limiting, not quota
+                    # Best practice: wait 30-90s between retries, max 3 attempts
+                    res2 = None
+                    for attempt, wait_sec in enumerate([30, 60, 90], 1):
+                        print(f"[RELAY] [{attempt}/3] Chờ {wait_sec}s cho Google xử lý giải phóng VM trên {acc_name}...", flush=True)
+                        time.sleep(wait_sec)
+                        # Verify VM is actually gone before retrying
+                        try:
+                            state._client = None
+                            remaining = state.client.list_assignments()
+                            if remaining:
+                                print(f"[RELAY] VM chưa được giải phóng hết ({len(remaining)} còn lại), thử unassign lại...", flush=True)
+                                for a in remaining:
+                                    state.client.unassign(a.endpoint)
+                                continue
+                        except Exception:
+                            pass
+                        res2 = subprocess.run(["colab", "new", "-s", SESSION_NAME, "--gpu", "T4"], capture_output=True, text=True, timeout=90)
+                        if "Session READY" in res2.stdout or "READY" in res2.stdout:
+                            print(f"[RELAY OK] GPU T4 sẵn sàng trên {acc_name} (attempt {attempt})!", flush=True)
+                            colab_pool.save_account_sessions(acc_name)
+                            break
                         err2 = res2.stderr or res2.stdout
-                        if "Service Unavailable" in err2 or "503" in err2:
-                            # Google rate limiting — don't mark cooldown, just skip this account
-                            print(f"[RELAY] account {acc_name}: Google tạm thời không cấp GPU (Service Unavailable), bỏ qua không phạt cooldown.", flush=True)
-                        else:
-                            colab_pool.mark_account_exhausted(acc_name, hours=1)
+                        print(f"[RELAY] Attempt {attempt} fail: {err2.strip()[:150]}", flush=True)
+                        if "ResourceExhausted" in err2 or ("503" in err2 and "outcome" in err2):
+                            print(f"[RELAY] Quota thật sự hết trên {acc_name}, đánh dấu 12h.", flush=True)
+                            colab_pool.mark_account_exhausted(acc_name, hours=12)
+                            return False
+                    else:
+                        # All 3 attempts failed — Service Unavailable (rate limit), no cooldown penalty
+                        print(f"[RELAY] {acc_name}: Google rate limit sau 3 lần thử, bỏ qua không phạt.", flush=True)
+                        return False
+                    if res2 and ("Session READY" not in res2.stdout and "READY" not in res2.stdout):
                         return False
             elif "503" in err or "ResourceExhausted" in err:
                 # Real GPU quota limit — need to wait for Google to reset
