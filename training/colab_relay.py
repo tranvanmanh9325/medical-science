@@ -1104,6 +1104,8 @@ def run_relay():
 
         if not success:
             print(f"[RELAY] Tài khoản {acc} không thể khởi động, chuyển sang tài khoản kế tiếp...")
+            # Mark short cooldown so relay tries next account (round-robin), not same one again
+            colab_pool.mark_account_exhausted(acc, hours=0.08)  # 5 phút
             time.sleep(5)
             continue
 
