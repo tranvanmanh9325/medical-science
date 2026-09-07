@@ -705,8 +705,13 @@ def deploy_and_start_training(acc_name, is_new=True):
                     else:
                         colab_pool.mark_account_exhausted(acc_name, hours=1)
                         return False
-            elif "outcome" in err or "Service Unavailable" in err or "ResourceExhausted" in err:
+            elif "503" in err or "ResourceExhausted" in err:
+                # Real GPU quota limit — need to wait for Google to reset
                 colab_pool.mark_account_exhausted(acc_name, hours=12)
+                return False
+            elif "Service Unavailable" in err or "outcome" in err:
+                # Transient error — short cooldown, retry soon
+                colab_pool.mark_account_exhausted(acc_name, hours=0.5)
                 return False
             else:
                 colab_pool.mark_account_exhausted(acc_name, hours=0.25)
@@ -892,7 +897,8 @@ def monitor_and_sync(acc_name):
                     sync_remote_checkpoint_rest(acc_name)
                 except Exception:
                     pass
-                colab_pool.mark_account_exhausted(acc_name, hours=12)
+                # Mark 4h (not 12h) — Google may revoke after natural session timeout, not quota
+                colab_pool.mark_account_exhausted(acc_name, hours=4)
                 return "FAILOVER"
             continue
         else:
