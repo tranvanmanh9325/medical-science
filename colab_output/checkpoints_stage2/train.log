@@ -168,3 +168,56 @@ Velocity curriculum: [0,0.15]->[0,0.45]->[0,0.80] m/s | Checkpoints: /content/ch
 -> FINAL MODEL SAVED: /content/checkpoints/apollo_stage2_final.npz (891KB)
 [GITHUB PUSH] Successfully pushed colab_output/checkpoints_stage2/apollo_stage2_final.npz to GitHub!
 STAGE 2 v2 TRAINING COMPLETE!
+APOLLO HUMANOID - STAGE 2: WALKING (v8)
+Linear Actor + Sigmoid log_std + Unbounded Gaussian
+JAX Backend: gpu
+Devices: [CudaDevice(id=0)]
+z_nominal=1.0160m | TERM_HEIGHT=0.762m | TERM_TILT=cos(25deg)=0.906
+action_scale=0.25 | CTRL_DT=0.01s | step_freq=1.2Hz
+[v8] Training from scratch | log_std init: -2.500 (std=0.082)
+[v8 CONFIG] ROLLOUT=24 | STEPS_PER_IT=98,304 | N_ITERS=3051
+[v8 CONFIG] LINEAR actor | sigmoid log_std | unbounded Gaussian | MAX_GRAD=0.5
+[v8 CONFIG] ENT_COEF=0.01->0.001 | PENALTY_SCL=0.20->1.00 | TOTAL=300,000,000 steps
+APOLLO HUMANOID - STAGE 2 v8 (LINEAR ACTOR + SIGMOID LOG_STD)
+Steps/iter=98,304 | N_iters=3051 | ROLLOUT=24
+[0001/3051] steps=98,304 | rew=0.05096 | loss=1.0006 | sps=578 | vx_max=0.25 | ent=0.0100 | log_std=-2.499 | t=170s *** WALKING WELL ***
+[0002/3051] steps=196,608 | rew=0.01716 | loss=0.3686 | sps=642 | vx_max=0.25 | ent=0.0100 | log_std=-2.497 | t=324s stepping
+[0003/3051] steps=294,912 | rew=0.01154 | loss=0.4715 | sps=8,562 | vx_max=0.25 | ent=0.0100 | log_std=-2.496 | t=335s improving
+[0004/3051] steps=393,216 | rew=-0.00956 | loss=0.3977 | sps=8,442 | vx_max=0.25 | ent=0.0099 | log_std=-2.495 | t=347s ...
+[0005/3051] steps=491,520 | rew=-0.02511 | loss=0.6834 | sps=8,331 | vx_max=0.25 | ent=0.0099 | log_std=-2.493 | t=358s ...
+[0010/3051] steps=983,040 | rew=0.03566 | loss=0.4710 | sps=8,423 | vx_max=0.25 | ent=0.0098 | log_std=-2.488 | t=417s *** WALKING ***
+[0020/3051] steps=1,966,080 | rew=0.05664 | loss=0.5905 | sps=8,408 | vx_max=0.25 | ent=0.0097 | log_std=-2.475 | t=535s *** WALKING WELL ***
+[0030/3051] steps=2,949,120 | rew=0.05087 | loss=0.5577 | sps=8,392 | vx_max=0.25 | ent=0.0095 | log_std=-2.456 | t=654s *** WALKING WELL ***
+[0040/3051] steps=3,932,160 | rew=0.05010 | loss=0.4154 | sps=8,374 | vx_max=0.25 | ent=0.0093 | log_std=-2.445 | t=771s *** WALKING WELL ***
+[0050/3051] steps=4,915,200 | rew=0.04761 | loss=0.3704 | sps=8,382 | vx_max=0.25 | ent=0.0091 | log_std=-2.433 | t=888s *** WALKING WELL ***
+[0060/3051] steps=5,898,240 | rew=0.04757 | loss=0.3549 | sps=8,382 | vx_max=0.25 | ent=0.0090 | log_std=-2.420 | t=1005s *** WALKING WELL ***
+[0070/3051] steps=6,881,280 | rew=0.04894 | loss=0.3118 | sps=8,387 | vx_max=0.25 | ent=0.0088 | log_std=-2.408 | t=1123s *** WALKING WELL ***
+[0080/3051] steps=7,864,320 | rew=0.05298 | loss=0.3327 | sps=8,376 | vx_max=0.25 | ent=0.0086 | log_std=-2.396 | t=1240s *** WALKING WELL ***
+[0090/3051] steps=8,847,360 | rew=0.05578 | loss=0.3553 | sps=8,386 | vx_max=0.25 | ent=0.0084 | log_std=-2.382 | t=1357s *** WALKING WELL ***
+[0100/3051] steps=9,830,400 | rew=0.05654 | loss=0.3086 | sps=8,386 | vx_max=0.25 | ent=0.0082 | log_std=-2.368 | t=1475s *** WALKING WELL ***
+[0110/3051] steps=10,813,440 | rew=0.05354 | loss=0.2470 | sps=8,372 | vx_max=0.25 | ent=0.0081 | log_std=-2.354 | t=1592s *** WALKING WELL ***
+[0120/3051] steps=11,796,480 | rew=0.05183 | loss=0.2882 | sps=8,365 | vx_max=0.25 | ent=0.0079 | log_std=-2.340 | t=1710s *** WALKING WELL ***
+[0130/3051] steps=12,779,520 | rew=0.04991 | loss=0.3075 | sps=8,368 | vx_max=0.25 | ent=0.0077 | log_std=-2.327 | t=1827s *** WALKING WELL ***
+[0140/3051] steps=13,762,560 | rew=0.04905 | loss=0.3285 | sps=8,369 | vx_max=0.25 | ent=0.0075 | log_std=-2.316 | t=1944s *** WALKING WELL ***
+[0150/3051] steps=14,745,600 | rew=0.04705 | loss=0.2691 | sps=8,371 | vx_max=0.25 | ent=0.0074 | log_std=-2.306 | t=2062s *** WALKING WELL ***
+[0160/3051] steps=15,728,640 | rew=0.04948 | loss=0.3366 | sps=8,379 | vx_max=0.25 | ent=0.0072 | log_std=-2.296 | t=2179s *** WALKING WELL ***
+[0170/3051] steps=16,711,680 | rew=0.04749 | loss=0.2727 | sps=8,376 | vx_max=0.25 | ent=0.0070 | log_std=-2.287 | t=2297s *** WALKING WELL ***
+[0180/3051] steps=17,694,720 | rew=0.04941 | loss=0.3671 | sps=8,347 | vx_max=0.25 | ent=0.0068 | log_std=-2.280 | t=2414s *** WALKING WELL ***
+[0190/3051] steps=18,677,760 | rew=0.04847 | loss=0.2587 | sps=8,371 | vx_max=0.25 | ent=0.0067 | log_std=-2.269 | t=2532s *** WALKING WELL ***
+[0200/3051] steps=19,660,800 | rew=0.04920 | loss=0.3054 | sps=8,364 | vx_max=0.25 | ent=0.0065 | log_std=-2.256 | t=2650s *** WALKING WELL ***
+[0210/3051] steps=20,643,840 | rew=0.05165 | loss=0.2258 | sps=8,364 | vx_max=0.25 | ent=0.0063 | log_std=-2.245 | t=2767s *** WALKING WELL ***
+[0220/3051] steps=21,626,880 | rew=0.05305 | loss=0.2023 | sps=8,393 | vx_max=0.25 | ent=0.0061 | log_std=-2.233 | t=2884s *** WALKING WELL ***
+[0230/3051] steps=22,609,920 | rew=0.05117 | loss=0.1688 | sps=8,374 | vx_max=0.25 | ent=0.0059 | log_std=-2.221 | t=3002s *** WALKING WELL ***
+[0240/3051] steps=23,592,960 | rew=0.05602 | loss=0.1719 | sps=8,371 | vx_max=0.25 | ent=0.0058 | log_std=-2.210 | t=3119s *** WALKING WELL ***
+[0250/3051] steps=24,576,000 | rew=0.04235 | loss=0.1737 | sps=8,367 | vx_max=0.25 | ent=0.0056 | log_std=-2.200 | t=3237s *** WALKING WELL ***
+[0260/3051] steps=25,559,040 | rew=0.03968 | loss=0.1575 | sps=8,373 | vx_max=0.25 | ent=0.0054 | log_std=-2.191 | t=3354s *** WALKING ***
+[0270/3051] steps=26,542,080 | rew=0.04394 | loss=0.1728 | sps=8,361 | vx_max=0.25 | ent=0.0052 | log_std=-2.182 | t=3472s *** WALKING WELL ***
+[0280/3051] steps=27,525,120 | rew=0.03774 | loss=0.1719 | sps=8,360 | vx_max=0.25 | ent=0.0051 | log_std=-2.175 | t=3589s *** WALKING ***
+[0290/3051] steps=28,508,160 | rew=0.04615 | loss=0.1957 | sps=8,373 | vx_max=0.25 | ent=0.0049 | log_std=-2.169 | t=3707s *** WALKING WELL ***
+[0300/3051] steps=29,491,200 | rew=0.04961 | loss=0.1806 | sps=8,403 | vx_max=0.25 | ent=0.0047 | log_std=-2.163 | t=3824s *** WALKING WELL ***
+-> checkpoint: /content/checkpoints/apollo_stage2_v8_step_29491200.npz (891KB)
+-> latest: /content/checkpoints/apollo_stage2_v8_latest.npz
+-> GitHub REST API push OK (step=29491200)
+[0310/3051] steps=30,474,240 | rew=0.05207 | loss=0.1734 | sps=8,399 | vx_max=0.25 | ent=0.0045 | log_std=-2.157 | t=3945s *** WALKING WELL ***
+[0320/3051] steps=31,457,280 | rew=0.04844 | loss=0.1697 | sps=8,366 | vx_max=0.26 | ent=0.0044 | log_std=-2.150 | t=4062s *** WALKING WELL ***
+[0330/3051] steps=32,440,320 | rew=0.05030 | loss=0.1280 | sps=8,407 | vx_max=0.26 | ent=0.0042 | log_std=-2.142 | t=4179s *** WALKING WELL ***
