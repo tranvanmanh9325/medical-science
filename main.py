@@ -2111,15 +2111,28 @@ class BlenderMuJoCoViewer:
 
             elif t == 'key':
                 k = cmd.get('key', '')
-                if k == 'R':
+                if k.upper() == 'W':
+                    self._walk_vx = min(self._walk_vx + 0.1, 1.2)
+                    if self.policy and hasattr(self.policy, 'set_cmd_vel'):
+                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                elif k.upper() == 'S':
+                    self._walk_vx = max(self._walk_vx - 0.1, 0.0)
+                    if self.policy and hasattr(self.policy, 'set_cmd_vel'):
+                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                elif k.upper() == 'X':
+                    self._walk_vx = self._walk_vy = self._walk_yaw = 0.0
+                    if self.policy and hasattr(self.policy, 'set_cmd_vel'):
+                        self.policy.set_cmd_vel(0.0, 0.0, 0.0)
+                elif k.upper() == 'R':
                     self._reset_robot()
                     if self.policy is not None:
                         self.policy.reset()
                     self.control_mode = 'PPO' if self.policy else 'PD'
-                elif k == 'B':
+                elif k.upper() == 'B':
                     if self.control_mode == 'RAGDOLL':
                         self.control_mode = 'PPO'
                         if self.policy: self.policy.reset()
+                        self._reset_robot()
                     else:
                         self.control_mode = 'RAGDOLL'
                 elif k == 'SPACE':
