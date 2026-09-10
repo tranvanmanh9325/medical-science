@@ -304,64 +304,108 @@ class PPOPolicyStage2(PPOPolicy):
 # ==============================================================================
 class PPOPolicyStage2V8(PPOPolicyStage2):
     """
-    Policy Stage 2 v8: Walking — LINEAR Actor (không dùng tanh ở output).
+    Policy Stage 2 v8: Walking — LINEAR Actor + 3-Phase FSM Startup (Industry Standard).
 
-    v8 khác v6: mean = Dense_3(x) — không có tanh wrap. Đây là industry standard
-    (legged_gym / rsl_rl / Isaac Lab) cho unbounded Gaussian policy.
-    action_scale = 0.25, vx_max có thể lên 1.2 m/s.
+    STARTUP SEQUENCE (ETH legged_gym / Unitree pattern):
+      Phase 1 — PD HOLD (100 steps = 1s):
+        Giữ nguyên default_pose bằng PD. PPO KHÔNG chạy. CPG đóng băng ở pha 0.
+        Mục đích: GRF đạt cân bằng tĩnh, tắt nhiễu cảm biến ban đầu.
 
-    Startup warmup: linearly ramp action_scale 0→0.25 trong 1 giây đầu tiên.
-    Chuẩn industry (legged_gym play.py): robot được hold default pose trước khi
-    policy lấy quyền điều khiển từ từ, tránh sudden torque spike gây ngã ngay.
+      Phase 2 — COSINE BLEND (150 steps = 1.5s):
+        alpha = 0.5*(1-cos(π*progress)) tăng từ 0→1 (zero-jerk S-curve).
+        Slew-rate limiter: max |Δaction| = 0.03 mỗi bước → tốc độ góc tối đa 0.75 rad/s.
+        prev_act lưu smooth_action (không phải raw action) để obs tiếp theo in-distribution.
+
+      Phase 3 — FULL PPO: policy kiểm soát toàn bộ.
+
+    CPG MANAGEMENT:
+      - cmd_vel ≈ 0: đóng băng phase (tránh xung đột đứng yên vs nhấc chân)
+      - cmd_vel > 0: CPG chạy bình thường ở 1.2 Hz
     """
 
-    # Warmup: 100 bước control (1s tại 100Hz) để ramp action_scale từ 0 → full
-    WARMUP_STEPS = 100
+    # Số bước control (100Hz) cho mỗi phase
+    STAND_HOLD_STEPS = 100   # Phase 1: 1.0s PD hold
+    BLEND_STEPS      = 150   # Phase 2: 1.5s cosine blend
+    TOTAL_WARMUP     = STAND_HOLD_STEPS + BLEND_STEPS  # 250 steps = 2.5s
+
+    # Slew-rate: tối đa thay đổi action 0.03 units/step → 0.03*0.25=0.0075 rad/step
+    MAX_ACT_RATE     = 0.03
 
     def __init__(self, checkpoint_path: str, mj_model, nu: int):
         super().__init__(checkpoint_path, mj_model, nu)
-        self._warmup_step = 0  # counter tăng dần từ 0 → WARMUP_STEPS
+        self._startup_step  = 0          # Phase counter
+        self._smooth_act    = np.zeros(nu, dtype=np.float32)  # Slew-rate buffer
+        print("[v8 FSM] Phase 1: PD HOLD (1.0s) — Stabilizing GRF...")
 
-    def _warmup_scale(self) -> float:
-        """Trả về action scale ramp factor [0.0 → 1.0] trong WARMUP_STEPS bước đầu."""
-        if self._warmup_step >= self.WARMUP_STEPS:
-            return 1.0
-        return self._warmup_step / self.WARMUP_STEPS
+    def _startup_alpha(self) -> float:
+        """Cosine S-curve alpha [0→1] cho Phase 2 blend. Phase 1 trả về -1 (hold mode)."""
+        if self._startup_step < self.STAND_HOLD_STEPS:
+            return -1.0   # Signal: return default_pose immediately
+        if self._startup_step >= self.TOTAL_WARMUP:
+            return 1.0    # Phase 3: full PPO
+        # Phase 2: cosine S-curve (zero initial và final jerk)
+        progress = (self._startup_step - self.STAND_HOLD_STEPS) / self.BLEND_STEPS
+        return 0.5 * (1.0 - math.cos(math.pi * progress))
 
     def infer(self, obs: np.ndarray) -> np.ndarray:
-        """v8 forward: LINEAR output — không tanh. Clip action tại [-1, 1] chỉ cho physics."""
+        """v8 LINEAR output — không tanh. Clip action tại [-1, 1] chỉ cho physics safety."""
         x = obs.astype(np.float32)
         for W, b in zip(self.W, self.b):
             x = self._elu(x @ W + b)
-        # v8: LINEAR — không tanh ở output layer
-        mean   = x @ self.W_mean + self.b_mean
-        action = np.clip(mean, -1.0, 1.0)
-        return action
+        return np.clip(x @ self.W_mean + self.b_mean, -1.0, 1.0)
 
     def step(self, data, mj_model) -> np.ndarray:
-        """Step với warmup action scale ramp."""
-        obs    = self.get_obs(data, mj_model)
-        action = self.infer(obs)
-        # Warmup: ramp action_scale từ 0 → full trong 1s đầu (tránh torque spike)
-        scale  = self.action_scale * self._warmup_scale()
-        ctrl   = self.default_pose + action * scale
-        ctrl   = np.clip(ctrl, self.ctrl_range[:, 0], self.ctrl_range[:, 1])
-        self.prev_act = action.copy()
-        # Advance gait clock và warmup counter
-        self.phase = (self.phase + self.CTRL_DT * self.STEP_FREQ) % 1.0
-        if self._warmup_step < self.WARMUP_STEPS:
-            self._warmup_step += 1
-            if self._warmup_step == self.WARMUP_STEPS:
-                print("[v8 WARMUP] Hoàn tất — policy đang kiểm soát toàn bộ (action_scale=0.25)")
+        """3-Phase FSM startup: PD Hold → Cosine Blend → Full PPO."""
+        alpha = self._startup_alpha()
+
+        # ── Phase 1: PD HOLD — giữ nguyên default_pose, không chạy PPO ──────
+        if alpha < 0.0:
+            ctrl = np.clip(self.default_pose.copy(),
+                           self.ctrl_range[:, 0], self.ctrl_range[:, 1])
+            # CPG đóng băng tại pha 0 trong Phase 1
+            self._startup_step += 1
+            if self._startup_step == self.STAND_HOLD_STEPS:
+                print("[v8 FSM] Phase 2: COSINE BLEND (1.5s) — Handing over to PPO AI...")
+            return ctrl
+
+        # ── Phase 2 & 3: PPO inference với slew-rate limiter ─────────────────
+        # CPG: chỉ chạy khi cmd_vel đủ lớn (tránh xung đột đứng yên vs nhấc chân)
+        cmd_magnitude = float(np.abs(self.cmd_vel[0])) + float(np.abs(self.cmd_vel[1]))
+        if cmd_magnitude > 0.05:
+            self.phase = (self.phase + self.CTRL_DT * self.STEP_FREQ) % 1.0
+
+        obs = self.get_obs(data, mj_model)
+        raw_action = self.infer(obs)
+
+        # Áp dụng alpha warmup (Phase 2) hoặc full (Phase 3)
+        target_action = alpha * raw_action
+
+        # Slew-rate limiter: tránh biến thiên đột ngột
+        delta = np.clip(target_action - self._smooth_act, -self.MAX_ACT_RATE, self.MAX_ACT_RATE)
+        self._smooth_act += delta
+
+        # Lưu smooth_action vào prev_act để obs bước tiếp theo in-distribution
+        self.prev_act = self._smooth_act.copy()
+
+        ctrl = self.default_pose + self._smooth_act * self.action_scale
+        ctrl = np.clip(ctrl, self.ctrl_range[:, 0], self.ctrl_range[:, 1])
+
+        # Advance startup counter
+        if self._startup_step < self.TOTAL_WARMUP:
+            self._startup_step += 1
+            if self._startup_step == self.TOTAL_WARMUP:
+                print("[v8 FSM] Phase 3: FULL PPO — Robot hoàn toàn tự cân bằng bằng AI!")
         return ctrl
 
     def set_cmd_vel(self, vx: float = 0.0, vy: float = 0.0, yaw: float = 0.0):
-        """v8 vx_max = 1.2 m/s (curriculum đạt full speed sau 200M steps)."""
+        """v8 vx_max = 1.2 m/s. Freeze CPG khi dừng (cmd_vel ≈ 0)."""
         self.cmd_vel[:] = np.clip([vx, vy, yaw], [-1.2, -0.3, -0.5], [1.2, 0.3, 0.5])
 
     def reset(self):
         super().reset()
-        self._warmup_step = 0  # Reset warmup khi robot được đặt lại
+        self._startup_step = 0
+        self._smooth_act[:] = 0.0
+        print("[v8 FSM] Phase 1: PD HOLD (1.0s) — Stabilizing GRF...")
 
 
 # ==============================================================================
