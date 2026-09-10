@@ -9,6 +9,12 @@ on:
       - 'training/colab_pool.py'
       - 'colab_deploy/train_stage2.py'
 
+# Ensure only ONE instance runs at a time.
+# When a new run is triggered (re-trigger or push), cancel the in-progress one.
+concurrency:
+  group: colab-training
+  cancel-in-progress: true
+
 jobs:
   keep-alive:
     runs-on: ubuntu-latest
@@ -71,13 +77,16 @@ jobs:
           python -u training/colab_relay.py
 
       - name: Re-trigger workflow for continuous training
-        if: always()
+        # Only re-trigger on success or failure (relay exited normally/error).
+        # NOT on cancellation (user manually stopped or concurrency replaced it).
+        # The concurrency group ensures only 1 run at a time — no cascades.
+        if: success() || failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Re-trigger this workflow to continue training after 6h limit
-          # Only re-trigger if training is not marked as complete
           if [ ! -f /tmp/training_complete ]; then
             echo "Re-triggering Colab Cloud Keeper for continued training..."
             gh workflow run "Colab Cloud Keeper" --repo ${{ github.repository }}
+          else
+            echo "Training complete flag found — not re-triggering."
           fi
