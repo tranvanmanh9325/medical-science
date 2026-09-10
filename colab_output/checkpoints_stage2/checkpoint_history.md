@@ -1,7 +1,7 @@
 # Apollo Stage 2 v2 - Nhật ký Huấn luyện & Checkpoints (Checkpoint History Log)
 
-- **Tài khoản đang chạy**: `account_3`
-- **Cập nhật lần cuối**: `2026-09-11 04:24:27 (Giờ Việt Nam)`
+- **Tài khoản đang chạy**: `account_1`
+- **Cập nhật lần cuối**: `2026-09-11 04:43:48 (Giờ Việt Nam)`
 - **Trạng thái**: Đang huấn luyện tích cực trên GPU T4
 - **Tổng số mốc checkpoint ghi nhận**: 0
 
