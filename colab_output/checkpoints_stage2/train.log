@@ -448,3 +448,7 @@ Steps/iter=98,304 | N_iters=3051 | ROLLOUT=24
 -> checkpoint: /content/checkpoints/apollo_stage2_v8_step_236027904.npz (891KB)
 -> GitHub REST API push OK (step=236027904)
 [2410/3051] steps=237,010,944 | rew=0.03674 | loss=0.0936 | sps=8,263 | vx_max=1.20 | ent=0.0010 | log_std=-1.908 | t=11179s *** WALKING ***
+[RESUME] Restored step=265617408, it=2700
+[2700/3051] steps=265,715,712 | rew=0.03585 | loss=0.5830 | sps=527 | vx_max=1.20 | ent=0.0010 | log_std=-1.861 | t=187s *** WALKING ***
+-> checkpoint: /content/checkpoints/apollo_stage2_v8_step_265715712.npz (891KB)
+-> GitHub REST API push OK (step=265715712)
