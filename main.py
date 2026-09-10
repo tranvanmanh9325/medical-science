@@ -355,6 +355,42 @@ class PPOPolicyStage2V8(PPOPolicyStage2):
             x = self._elu(x @ W + b)
         return np.clip(x @ self.W_mean + self.b_mean, -1.0, 1.0)
 
+    def get_gravity_comp_force(self, data, mj_model, alpha: float) -> np.ndarray:
+        """
+        Tính lực nâng đỡ trọng lực cho root body trong Phase 1&2.
+        Phase 1 (alpha<0): 100% gravity comp + upright restoring torque.
+        Phase 2 (0<alpha<1): tuyến tính fade out từ (1-alpha)*force.
+        Phase 3 (alpha=1): 0 (tắt hoàn toàn).
+        """
+        if alpha >= 1.0:
+            return np.zeros(6)
+
+        gravity = float(mj_model.opt.gravity[2])  # -9.81 m/s²
+        mass = float(np.sum(mj_model.body_mass))   # total mass
+        f_grav = -gravity * mass                   # upward force = mg
+
+        # Scale: 100% trong Phase 1, fade out trong Phase 2
+        scale = (1.0 - alpha) if alpha >= 0.0 else 1.0
+
+        # Lực nâng đỡ theo trục Z (world frame)
+        fz = f_grav * scale
+
+        # Moment restoring: kéo torso về thẳng đứng (tỉ lệ với roll/pitch)
+        qpos = data.qpos
+        qw, qx, qy, qz = float(qpos[3]), float(qpos[4]), float(qpos[5]), float(qpos[6])
+        upvec = np.array([
+            2.0*(qx*qz + qw*qy),
+            2.0*(qy*qz - qw*qx),
+            1.0 - 2.0*(qx**2 + qy**2)
+        ])
+        # Upright torque: cross(upvec, [0,0,1]) * Kp - angular_vel * Kd
+        # Giảm dần theo alpha
+        K_upright = 500.0 * scale   # N·m/rad — restoring torque
+        K_damp    = 80.0  * scale   # N·m·s/rad — angular damping
+        torque_x  = -K_upright * upvec[1] - K_damp * float(data.qvel[3])
+        torque_y  =  K_upright * upvec[0] - K_damp * float(data.qvel[4])
+        return np.array([0.0, 0.0, fz, torque_x, torque_y, 0.0])
+
     def step(self, data, mj_model) -> np.ndarray:
         """3-Phase FSM startup: PD Hold → Cosine Blend → Full PPO.
 
@@ -366,7 +402,6 @@ class PPOPolicyStage2V8(PPOPolicyStage2):
 
         # ── Phase 1: PD HOLD ───────────────────────────────────────────────
         if alpha < 0.0:
-            # Giữ default_pose, prev_act = zeros (matching training episode reset)
             ctrl = np.clip(self.default_pose.copy(),
                            self.ctrl_range[:, 0], self.ctrl_range[:, 1])
             self._startup_step += 1
@@ -393,13 +428,11 @@ class PPOPolicyStage2V8(PPOPolicyStage2):
         self._smooth_act += delta
 
         # CRITICAL FIX: prev_act = raw_action (matches training get_obs prev_act convention)
-        # Training: obs = get_obs(d, env_act, ...) where env_act is network output [-1,1]
         self.prev_act = raw_action.copy()
 
         ctrl = self.default_pose + self._smooth_act * self.action_scale
         ctrl = np.clip(ctrl, self.ctrl_range[:, 0], self.ctrl_range[:, 1])
 
-        # Advance startup counter
         if self._startup_step < self.TOTAL_WARMUP:
             self._startup_step += 1
             if self._startup_step == self.TOTAL_WARMUP:
@@ -1239,14 +1272,21 @@ class BlenderMuJoCoViewer:
 
         elif self.control_mode == 'PPO' and self.policy is not None:
             # ── PPO Brain AI mode ────────────────────────────────────────────
-            # Training: policy runs at CTRL_DT=0.01s (5 substeps × SIM_DT=0.002s)
-            # Must call policy ONCE then step physics N_SUBSTEPS=5 times.
-            # Calling policy every single sim step = 2.5x oversampling → thrashing!
             ctrl = self.policy.step(self.data, self.model)
             self.data.ctrl[:] = ctrl
-            self.data.xfrc_applied[self.root_body_id][:] = 0.0
+
+            # Gravity compensation + upright restoring force trong Phase 1 & 2
+            # Tắt hoàn toàn khi Phase 3 (alpha=1.0) để PPO hoàn toàn tự chủ
+            alpha = self.policy._startup_alpha() if hasattr(self.policy, '_startup_alpha') else 1.0
+            if alpha < 1.0:
+                gcomp = self.policy.get_gravity_comp_force(self.data, self.model, alpha)
+                self.data.xfrc_applied[self.root_body_id][:] = gcomp
+            else:
+                self.data.xfrc_applied[self.root_body_id][:] = 0.0
+
             if np.any(push != 0.0):
-                self.data.xfrc_applied[self.root_body_id][:3] = push
+                self.data.xfrc_applied[self.root_body_id][:3] += push
+
             # Run N_SUBSTEPS physics steps with fixed ctrl (same as training)
             for _ in range(self.N_SUBSTEPS):
                 mujoco.mj_step(self.model, self.data)
