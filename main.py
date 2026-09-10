@@ -385,8 +385,8 @@ class PPOPolicyStage2V8(PPOPolicyStage2):
         ])
         # Upright torque: cross(upvec, [0,0,1]) * Kp - angular_vel * Kd
         # Giảm dần theo alpha
-        K_upright = 500.0 * scale   # N·m/rad — restoring torque
-        K_damp    = 80.0  * scale   # N·m·s/rad — angular damping
+        K_upright = 3000.0 * scale   # N·m/rad — restoring torque (mạnh hơn cho 81kg robot)
+        K_damp    = 300.0  * scale   # N·m·s/rad — angular damping
         torque_x  = -K_upright * upvec[1] - K_damp * float(data.qvel[3])
         torque_y  =  K_upright * upvec[0] - K_damp * float(data.qvel[4])
         return np.array([0.0, 0.0, fz, torque_x, torque_y, 0.0])
@@ -1246,6 +1246,11 @@ class BlenderMuJoCoViewer:
         self.push_force = np.zeros(3)
         self.push_decay = 0.0
         self.trajectory_history.clear()
+        # Apply immediate gravity comp so robot doesn't fall in the first few frames
+        gravity = float(self.model.opt.gravity[2])
+        mass = float(np.sum(self.model.body_mass))
+        fz = -gravity * mass  # upward force = mg
+        self.data.xfrc_applied[self.root_body_id][:] = [0.0, 0.0, fz, 0.0, 0.0, 0.0]
         mujoco.mj_forward(self.model, self.data)
         print("[ROBOT] Đã đặt lại tư thế đứng thẳng chuẩn ban đầu")
 
