@@ -522,11 +522,32 @@ async def policy_sim2real_check() -> str:
     result.append(f"\n{'TẤT CẢ OK!' if not fail else f'CO {len(fail)} VAN DE!'}")
     return "\n".join(result)
 
-@mcp.tool(title="Chup man hinh", description="Send screenshot command to running simulation (P key).")
+SCREENSHOT_FILE = IPC_DIR / "sim_screenshot.png"
+
+@mcp.tool(title="Chup man hinh simulation", description="Capture OpenGL framebuffer from running simulation. Waits for file and returns path.")
 async def simulation_screenshot() -> str:
-    if not _is_sim_running(): return "Simulation chua chay."
-    _send_command({"type":"key","key":"P"})
-    return "Da gui lenh chup man hinh (phim P)."
+    if not _is_sim_running(): return "Simulation chua chay. Dung simulation_start truoc."
+
+    # Xoa file cu neu co
+    if SCREENSHOT_FILE.exists():
+        SCREENSHOT_FILE.unlink()
+
+    # Gui lenh chup
+    _send_command({"type": "key", "key": "screenshot"})
+
+    # Cho toi 4 giay de file xuat hien
+    for i in range(40):
+        await asyncio.sleep(0.1)
+        if SCREENSHOT_FILE.exists() and SCREENSHOT_FILE.stat().st_size > 1000:
+            sz = SCREENSHOT_FILE.stat().st_size
+            return (
+                f"SCREENSHOT OK!\n"
+                f"Path: {SCREENSHOT_FILE}\n"
+                f"Size: {sz // 1024}KB\n"
+                f"Xem file tai: {SCREENSHOT_FILE}"
+            )
+
+    return f"Timeout 4s - Screenshot chua duoc tao.\nCo the IPC chua ket noi (can restart simulation)."
 
 @mcp.tool(title="Thong tin du an", description="Show complete project overview: training status, checkpoints, simulation.")
 async def project_info() -> str:

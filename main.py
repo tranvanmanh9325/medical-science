@@ -1102,6 +1102,15 @@ class BlenderMuJoCoViewer:
         self.frame_count = 0
         self.last_fps_time = time.time()
 
+        # MCP IPC — file-based inter-process communication
+        _ipc_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mcp-server', 'ipc')
+        os.makedirs(_ipc_dir, exist_ok=True)
+        self._ipc_cmd_file    = os.path.join(_ipc_dir, 'sim_cmd.json')
+        self._ipc_status_file = os.path.join(_ipc_dir, 'sim_status.json')
+        self._ipc_screenshot_file = os.path.join(_ipc_dir, 'sim_screenshot.png')
+        self._ipc_frame       = 0   # Frame counter cho throttle
+        self._screenshot_requested = False
+
         # Thử nghiệm lực đẩy nhiễu loạn
         self.push_force = np.zeros(3)
         self.push_decay = 0.0
@@ -1939,6 +1948,11 @@ class BlenderMuJoCoViewer:
             while not glfw.window_should_close(self.window):
                 glfw.poll_events()
 
+                # ── MCP IPC: đọc lệnh mỗi 10 frame (non-blocking) ──────────
+                self._ipc_frame += 1
+                if self._ipc_frame % 10 == 0:
+                    self._ipc_process_commands()
+
                 now = time.time()
                 frame_dt = now - last_frame_time
                 last_frame_time = now
@@ -1973,6 +1987,10 @@ class BlenderMuJoCoViewer:
                     telem['fz_right'],
                     telem['com_vel'][1]
                 )
+
+                # ── MCP IPC: ghi trạng thái mỗi 30 frame ────────────────────
+                if self._ipc_frame % 30 == 0:
+                    self._ipc_write_status(telem)
 
                 # 1. Kết xuất không gian 3D MuJoCo
                 w, h = glfw.get_framebuffer_size(self.window)
@@ -2028,10 +2046,122 @@ class BlenderMuJoCoViewer:
                 gl.glMatrixMode(gl.GL_MODELVIEW)
 
                 glfw.swap_buffers(self.window)
+
+                # ── MCP Screenshot: chụp OpenGL framebuffer khi được yêu cầu ─
+                if self._screenshot_requested:
+                    self._ipc_capture_screenshot()
+                    self._screenshot_requested = False
+
         finally:
             self.cleanup()
 
 
+
+    # ═══════════════════════════════════════════════════════════════
+    # MCP IPC — File-based Inter-Process Communication
+    # ═══════════════════════════════════════════════════════════════
+
+    def _ipc_process_commands(self):
+        """Non-blocking: đọc và thực thi lệnh từ MCP server (mỗi 10 frame)."""
+        try:
+            if not os.path.exists(self._ipc_cmd_file):
+                return
+            with open(self._ipc_cmd_file, 'r', encoding='utf-8') as f:
+                cmd = json.load(f)
+            os.remove(self._ipc_cmd_file)  # Consume command
+            t = cmd.get('type', '')
+
+            if t == 'set_velocity':
+                vx = float(cmd.get('vx', 0)); vy = float(cmd.get('vy', 0)); yaw = float(cmd.get('yaw', 0))
+                if self.policy and hasattr(self.policy, 'set_cmd_vel'):
+                    self.policy.set_cmd_vel(vx, vy, yaw)
+                self._walk_vx = vx; self._walk_vy = vy; self._walk_yaw = yaw
+
+            elif t == 'push':
+                self.inject_perturbation(
+                    fx=float(cmd.get('fx', 0)),
+                    fy=float(cmd.get('fy', 0)),
+                    duration=float(cmd.get('duration', 0.25))
+                )
+
+            elif t == 'set_speed':
+                self.sim_speed = max(0.05, min(4.0, float(cmd.get('value', 1.0))))
+
+            elif t == 'key':
+                k = cmd.get('key', '')
+                if k == 'R':
+                    self._reset_robot()
+                    if self.policy is not None:
+                        self.policy.reset()
+                    self.control_mode = 'PPO' if self.policy else 'PD'
+                elif k == 'B':
+                    if self.control_mode == 'RAGDOLL':
+                        self.control_mode = 'PPO'
+                        if self.policy: self.policy.reset()
+                    else:
+                        self.control_mode = 'RAGDOLL'
+                elif k == 'SPACE':
+                    self.paused = not self.paused
+                elif k == 'P' or k == 'screenshot':
+                    self._screenshot_requested = True
+
+        except Exception:
+            pass  # Non-blocking: ignore all errors
+
+    def _ipc_write_status(self, telem: dict):
+        """Atomic write: ghi trạng thái robot ra file JSON cho MCP server."""
+        try:
+            qpos = self.data.qpos; qvel = self.data.qvel
+            qw, qx, qy, qz = float(qpos[3]), float(qpos[4]), float(qpos[5]), float(qpos[6])
+            roll  = np.degrees(np.arctan2(2*(qw*qx+qy*qz), 1-2*(qx**2+qy**2)))
+            pitch = np.degrees(np.arcsin(max(-1.0, min(1.0, 2*(qw*qy-qz*qx)))))
+            yaw   = np.degrees(np.arctan2(2*(qw*qz+qx*qy), 1-2*(qy**2+qz**2)))
+            com   = telem.get('com', np.zeros(3))
+            status = {
+                'control_mode':  self.control_mode,
+                'sim_time':      float(self.data.time),
+                'pelvis_z':      float(qpos[2]),
+                'roll':          float(roll),
+                'pitch':         float(pitch),
+                'yaw':           float(yaw),
+                'vx_actual':     float(qvel[0]),
+                'vy_actual':     float(qvel[1]),
+                'vx_cmd':        float(getattr(self, '_walk_vx', 0.0)),
+                'fz_left':       float(telem.get('fz_left', 0)),
+                'fz_right':      float(telem.get('fz_right', 0)),
+                'total_power':   float(telem.get('total_power', 0)),
+                'total_mass':    float(self.total_mass),
+                'com_x': float(com[0]) if hasattr(com, '__len__') else 0.0,
+                'com_y': float(com[1]) if hasattr(com, '__len__') else 0.0,
+                'com_z': float(com[2]) if hasattr(com, '__len__') else 0.0,
+                'zmp_x': float(telem.get('zmp', [0,0])[0]) if telem.get('zmp') is not None else 0.0,
+                'zmp_y': float(telem.get('zmp', [0,0])[1]) if telem.get('zmp') is not None else 0.0,
+                'render_fps':    float(self.render_fps),
+                'physics_fps':   float(self.physics_fps),
+                'sim_speed':     float(self.sim_speed),
+                'screenshot_path': self._ipc_screenshot_file,
+            }
+            tmp = self._ipc_status_file + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(status, f)
+            os.replace(tmp, self._ipc_status_file)
+        except Exception:
+            pass
+
+    def _ipc_capture_screenshot(self):
+        """Chụp OpenGL framebuffer → PNG. Được gọi từ render loop sau swap_buffers."""
+        try:
+            w, h = glfw.get_framebuffer_size(self.window)
+            # Đọc front buffer (sau swap)
+            gl.glReadBuffer(gl.GL_FRONT)
+            pixels = gl.glReadPixels(0, 0, w, h, gl.GL_RGB, gl.GL_UNSIGNED_BYTE)
+            from PIL import Image
+            img = Image.frombytes('RGB', (w, h), pixels)
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)  # OpenGL origin ở góc dưới-trái
+            img.save(self._ipc_screenshot_file)
+            print(f"[MCP] Screenshot saved: {self._ipc_screenshot_file} ({w}x{h})")
+        except Exception as e:
+            print(f"[MCP] Screenshot error: {e}")
 
     def cleanup(self):
         """Giải phóng triệt để toàn bộ tài nguyên OpenGL, MuJoCo Context và đóng cửa sổ."""
