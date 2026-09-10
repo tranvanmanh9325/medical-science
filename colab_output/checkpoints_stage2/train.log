@@ -486,3 +486,10 @@ Steps/iter=98,304 | N_iters=3051 | ROLLOUT=24
 -> GitHub REST API push OK (step=295206912)
 [3010/3051] steps=296,189,952 | rew=0.03649 | loss=0.3936 | sps=8,431 | vx_max=1.20 | ent=0.0010 | log_std=-1.824 | t=3975s *** WALKING ***
 [3020/3051] steps=297,172,992 | rew=0.04961 | loss=0.4930 | sps=8,419 | vx_max=1.20 | ent=0.0010 | log_std=-1.823 | t=4092s *** WALKING WELL ***
+[3030/3051] steps=298,156,032 | rew=0.03932 | loss=0.4293 | sps=8,435 | vx_max=1.20 | ent=0.0010 | log_std=-1.823 | t=4208s *** WALKING ***
+[3040/3051] steps=299,139,072 | rew=0.03026 | loss=0.4238 | sps=8,405 | vx_max=1.20 | ent=0.0010 | log_std=-1.822 | t=4325s *** WALKING ***
+[3050/3051] steps=300,122,112 | rew=0.03431 | loss=0.4633 | sps=8,424 | vx_max=1.20 | ent=0.0010 | log_std=-1.821 | t=4442s *** WALKING ***
+-> checkpoint: /content/checkpoints/apollo_stage2_v8_step_300220416.npz (891KB)
+-> GitHub REST API push OK (step=300220416)
+STAGE 2 v8 TRAINING COMPLETE! (Linear Actor + Sigmoid log_std)
+Total steps: 300,220,416 | Checkpoint: /content/checkpoints/apollo_stage2_v8_final.npz
