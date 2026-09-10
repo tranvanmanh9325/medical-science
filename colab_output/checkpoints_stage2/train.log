@@ -136,3 +136,81 @@ Starting training loop at 2026-09-10 17:47:34...
 [0122/1525] steps=11,993,088 | rew=0.07170 | loss=0.1216 | sps=7,186 | ent=0.0078 | log_std=-1.724 | t=1998s stepping
 [0123/1525] steps=12,091,392 | rew=0.06871 | loss=0.1286 | sps=7,199 | ent=0.0078 | log_std=-1.723 | t=2012s stepping
 [0124/1525] steps=12,189,696 | rew=0.06669 | loss=0.1293 | sps=7,181 | ent=0.0078 | log_std=-1.722 | t=2026s stepping
+[0125/1525] steps=12,288,000 | rew=0.06703 | loss=0.1242 | sps=7,204 | ent=0.0078 | log_std=-1.721 | t=2039s stepping
+[0126/1525] steps=12,386,304 | rew=0.06931 | loss=0.1197 | sps=7,179 | ent=0.0078 | log_std=-1.720 | t=2053s stepping
+[0127/1525] steps=12,484,608 | rew=0.07253 | loss=0.1100 | sps=7,086 | ent=0.0078 | log_std=-1.719 | t=2067s stepping
+[0128/1525] steps=12,582,912 | rew=0.07595 | loss=0.1030 | sps=7,116 | ent=0.0077 | log_std=-1.718 | t=2081s stepping
+[0129/1525] steps=12,681,216 | rew=0.07943 | loss=0.0977 | sps=7,172 | ent=0.0077 | log_std=-1.716 | t=2094s stepping
+[0130/1525] steps=12,779,520 | rew=0.08200 | loss=0.0933 | sps=7,137 | ent=0.0077 | log_std=-1.715 | t=2108s *** BALANCED WALKING ***
+[0131/1525] steps=12,877,824 | rew=0.08397 | loss=0.0933 | sps=7,166 | ent=0.0077 | log_std=-1.714 | t=2122s *** BALANCED WALKING ***
+[0132/1525] steps=12,976,128 | rew=0.08527 | loss=0.0874 | sps=7,192 | ent=0.0077 | log_std=-1.713 | t=2136s *** BALANCED WALKING ***
+[0133/1525] steps=13,074,432 | rew=0.08629 | loss=0.0874 | sps=7,172 | ent=0.0076 | log_std=-1.711 | t=2149s *** BALANCED WALKING ***
+[0134/1525] steps=13,172,736 | rew=0.08716 | loss=0.0891 | sps=7,096 | ent=0.0076 | log_std=-1.709 | t=2163s *** BALANCED WALKING ***
+[0135/1525] steps=13,271,040 | rew=0.08763 | loss=0.0945 | sps=7,105 | ent=0.0076 | log_std=-1.707 | t=2177s *** BALANCED WALKING ***
+[0136/1525] steps=13,369,344 | rew=0.08789 | loss=0.1234 | sps=7,184 | ent=0.0076 | log_std=-1.704 | t=2191s *** BALANCED WALKING ***
+[0137/1525] steps=13,467,648 | rew=0.08693 | loss=0.1899 | sps=7,175 | ent=0.0076 | log_std=-1.702 | t=2205s *** BALANCED WALKING ***
+[0138/1525] steps=13,565,952 | rew=0.08466 | loss=0.1956 | sps=7,164 | ent=0.0076 | log_std=-1.701 | t=2218s *** BALANCED WALKING ***
+[0139/1525] steps=13,664,256 | rew=0.08145 | loss=0.2231 | sps=7,173 | ent=0.0075 | log_std=-1.700 | t=2232s *** BALANCED WALKING ***
+[0140/1525] steps=13,762,560 | rew=0.07775 | loss=0.2200 | sps=7,164 | ent=0.0075 | log_std=-1.699 | t=2246s stepping
+[0141/1525] steps=13,860,864 | rew=0.07474 | loss=0.2356 | sps=7,156 | ent=0.0075 | log_std=-1.699 | t=2260s stepping
+[0142/1525] steps=13,959,168 | rew=0.07324 | loss=0.1757 | sps=7,061 | ent=0.0075 | log_std=-1.698 | t=2273s stepping
+[0143/1525] steps=14,057,472 | rew=0.07463 | loss=0.1745 | sps=7,191 | ent=0.0075 | log_std=-1.697 | t=2287s stepping
+[0144/1525] steps=14,155,776 | rew=0.07904 | loss=0.2431 | sps=7,175 | ent=0.0075 | log_std=-1.696 | t=2301s stepping
+[0145/1525] steps=14,254,080 | rew=0.08409 | loss=0.2117 | sps=7,182 | ent=0.0074 | log_std=-1.695 | t=2315s *** BALANCED WALKING ***
+[0146/1525] steps=14,352,384 | rew=0.08667 | loss=0.1770 | sps=7,172 | ent=0.0074 | log_std=-1.694 | t=2328s *** BALANCED WALKING ***
+[0147/1525] steps=14,450,688 | rew=0.08741 | loss=0.1447 | sps=7,188 | ent=0.0074 | log_std=-1.693 | t=2342s *** BALANCED WALKING ***
+[0148/1525] steps=14,548,992 | rew=0.08742 | loss=0.1186 | sps=7,173 | ent=0.0074 | log_std=-1.691 | t=2356s *** BALANCED WALKING ***
+[0149/1525] steps=14,647,296 | rew=0.08682 | loss=0.0933 | sps=7,096 | ent=0.0074 | log_std=-1.690 | t=2370s *** BALANCED WALKING ***
+[0150/1525] steps=14,745,600 | rew=0.08557 | loss=0.0859 | sps=7,135 | ent=0.0073 | log_std=-1.689 | t=2383s *** BALANCED WALKING ***
+[0151/1525] steps=14,843,904 | rew=0.08455 | loss=0.0849 | sps=7,169 | ent=0.0073 | log_std=-1.688 | t=2397s *** BALANCED WALKING ***
+[0152/1525] steps=14,942,208 | rew=0.08350 | loss=0.0783 | sps=7,154 | ent=0.0073 | log_std=-1.687 | t=2411s *** BALANCED WALKING ***
+[0153/1525] steps=15,040,512 | rew=0.08294 | loss=0.0739 | sps=7,179 | ent=0.0073 | log_std=-1.686 | t=2425s *** BALANCED WALKING ***
+[0154/1525] steps=15,138,816 | rew=0.08251 | loss=0.0719 | sps=7,177 | ent=0.0073 | log_std=-1.685 | t=2438s *** BALANCED WALKING ***
+[0155/1525] steps=15,237,120 | rew=0.08216 | loss=0.0701 | sps=7,174 | ent=0.0073 | log_std=-1.685 | t=2452s *** BALANCED WALKING ***
+[0156/1525] steps=15,335,424 | rew=0.08208 | loss=0.0689 | sps=7,103 | ent=0.0072 | log_std=-1.684 | t=2466s *** BALANCED WALKING ***
+[0157/1525] steps=15,433,728 | rew=0.08233 | loss=0.0667 | sps=7,090 | ent=0.0072 | log_std=-1.684 | t=2480s *** BALANCED WALKING ***
+[0158/1525] steps=15,532,032 | rew=0.08264 | loss=0.0666 | sps=7,180 | ent=0.0072 | log_std=-1.683 | t=2493s *** BALANCED WALKING ***
+[0159/1525] steps=15,630,336 | rew=0.08264 | loss=0.0676 | sps=7,179 | ent=0.0072 | log_std=-1.682 | t=2507s *** BALANCED WALKING ***
+[0160/1525] steps=15,728,640 | rew=0.08254 | loss=0.0736 | sps=7,181 | ent=0.0072 | log_std=-1.682 | t=2521s *** BALANCED WALKING ***
+[0161/1525] steps=15,826,944 | rew=0.08237 | loss=0.0717 | sps=7,171 | ent=0.0072 | log_std=-1.681 | t=2535s *** BALANCED WALKING ***
+[0162/1525] steps=15,925,248 | rew=0.08226 | loss=0.0722 | sps=7,152 | ent=0.0071 | log_std=-1.680 | t=2548s *** BALANCED WALKING ***
+[0163/1525] steps=16,023,552 | rew=0.08219 | loss=0.0722 | sps=7,150 | ent=0.0071 | log_std=-1.679 | t=2562s *** BALANCED WALKING ***
+[0164/1525] steps=16,121,856 | rew=0.08209 | loss=0.0736 | sps=7,035 | ent=0.0071 | log_std=-1.678 | t=2576s *** BALANCED WALKING ***
+[0165/1525] steps=16,220,160 | rew=0.08180 | loss=0.0712 | sps=7,158 | ent=0.0071 | log_std=-1.677 | t=2590s *** BALANCED WALKING ***
+[0166/1525] steps=16,318,464 | rew=0.08119 | loss=0.0705 | sps=7,154 | ent=0.0071 | log_std=-1.677 | t=2604s *** BALANCED WALKING ***
+[0167/1525] steps=16,416,768 | rew=0.08054 | loss=0.0656 | sps=7,161 | ent=0.0070 | log_std=-1.676 | t=2617s *** BALANCED WALKING ***
+[0168/1525] steps=16,515,072 | rew=0.08008 | loss=0.0652 | sps=7,149 | ent=0.0070 | log_std=-1.675 | t=2631s *** BALANCED WALKING ***
+[0169/1525] steps=16,613,376 | rew=0.08002 | loss=0.0651 | sps=7,160 | ent=0.0070 | log_std=-1.674 | t=2645s *** BALANCED WALKING ***
+[0170/1525] steps=16,711,680 | rew=0.08029 | loss=0.0627 | sps=7,160 | ent=0.0070 | log_std=-1.674 | t=2659s *** BALANCED WALKING ***
+[0171/1525] steps=16,809,984 | rew=0.08059 | loss=0.0627 | sps=7,054 | ent=0.0070 | log_std=-1.673 | t=2673s *** BALANCED WALKING ***
+[0172/1525] steps=16,908,288 | rew=0.08088 | loss=0.0621 | sps=7,115 | ent=0.0070 | log_std=-1.672 | t=2686s *** BALANCED WALKING ***
+[0173/1525] steps=17,006,592 | rew=0.08121 | loss=0.0616 | sps=7,173 | ent=0.0069 | log_std=-1.672 | t=2700s *** BALANCED WALKING ***
+[0174/1525] steps=17,104,896 | rew=0.08133 | loss=0.0613 | sps=7,154 | ent=0.0069 | log_std=-1.671 | t=2714s *** BALANCED WALKING ***
+[0175/1525] steps=17,203,200 | rew=0.08129 | loss=0.0619 | sps=7,155 | ent=0.0069 | log_std=-1.670 | t=2728s *** BALANCED WALKING ***
+[0176/1525] steps=17,301,504 | rew=0.08109 | loss=0.0592 | sps=7,177 | ent=0.0069 | log_std=-1.670 | t=2741s *** BALANCED WALKING ***
+[0177/1525] steps=17,399,808 | rew=0.08083 | loss=0.0606 | sps=7,159 | ent=0.0069 | log_std=-1.669 | t=2755s *** BALANCED WALKING ***
+[0178/1525] steps=17,498,112 | rew=0.08076 | loss=0.0591 | sps=7,064 | ent=0.0069 | log_std=-1.669 | t=2769s *** BALANCED WALKING ***
+[0179/1525] steps=17,596,416 | rew=0.08069 | loss=0.0599 | sps=7,060 | ent=0.0068 | log_std=-1.668 | t=2783s *** BALANCED WALKING ***
+[0180/1525] steps=17,694,720 | rew=0.08084 | loss=0.0616 | sps=7,159 | ent=0.0068 | log_std=-1.667 | t=2797s *** BALANCED WALKING ***
+[0181/1525] steps=17,793,024 | rew=0.08101 | loss=0.0601 | sps=7,166 | ent=0.0068 | log_std=-1.667 | t=2811s *** BALANCED WALKING ***
+[0182/1525] steps=17,891,328 | rew=0.08128 | loss=0.0616 | sps=7,164 | ent=0.0068 | log_std=-1.666 | t=2824s *** BALANCED WALKING ***
+[0183/1525] steps=17,989,632 | rew=0.08167 | loss=0.0625 | sps=7,184 | ent=0.0068 | log_std=-1.666 | t=2838s *** BALANCED WALKING ***
+[0184/1525] steps=18,087,936 | rew=0.08188 | loss=0.0620 | sps=7,145 | ent=0.0067 | log_std=-1.665 | t=2852s *** BALANCED WALKING ***
+[0185/1525] steps=18,186,240 | rew=0.08215 | loss=0.0622 | sps=7,121 | ent=0.0067 | log_std=-1.664 | t=2866s *** BALANCED WALKING ***
+[0186/1525] steps=18,284,544 | rew=0.08211 | loss=0.0597 | sps=7,002 | ent=0.0067 | log_std=-1.663 | t=2880s *** BALANCED WALKING ***
+[0187/1525] steps=18,382,848 | rew=0.08171 | loss=0.0582 | sps=7,145 | ent=0.0067 | log_std=-1.663 | t=2893s *** BALANCED WALKING ***
+[0188/1525] steps=18,481,152 | rew=0.08130 | loss=0.0567 | sps=7,161 | ent=0.0067 | log_std=-1.662 | t=2907s *** BALANCED WALKING ***
+[0189/1525] steps=18,579,456 | rew=0.08122 | loss=0.0576 | sps=7,160 | ent=0.0067 | log_std=-1.661 | t=2921s *** BALANCED WALKING ***
+[0190/1525] steps=18,677,760 | rew=0.08141 | loss=0.0559 | sps=7,143 | ent=0.0066 | log_std=-1.661 | t=2935s *** BALANCED WALKING ***
+[0191/1525] steps=18,776,064 | rew=0.08169 | loss=0.0548 | sps=7,158 | ent=0.0066 | log_std=-1.660 | t=2948s *** BALANCED WALKING ***
+[0192/1525] steps=18,874,368 | rew=0.08206 | loss=0.0540 | sps=7,165 | ent=0.0066 | log_std=-1.660 | t=2962s *** BALANCED WALKING ***
+[0193/1525] steps=18,972,672 | rew=0.08239 | loss=0.0561 | sps=7,049 | ent=0.0066 | log_std=-1.659 | t=2976s *** BALANCED WALKING ***
+[0194/1525] steps=19,070,976 | rew=0.08244 | loss=0.0543 | sps=7,160 | ent=0.0066 | log_std=-1.659 | t=2990s *** BALANCED WALKING ***
+[0195/1525] steps=19,169,280 | rew=0.08241 | loss=0.0553 | sps=7,167 | ent=0.0065 | log_std=-1.658 | t=3004s *** BALANCED WALKING ***
+[0196/1525] steps=19,267,584 | rew=0.08233 | loss=0.0543 | sps=7,173 | ent=0.0065 | log_std=-1.657 | t=3017s *** BALANCED WALKING ***
+[0197/1525] steps=19,365,888 | rew=0.08213 | loss=0.0532 | sps=7,155 | ent=0.0065 | log_std=-1.657 | t=3031s *** BALANCED WALKING ***
+[0198/1525] steps=19,464,192 | rew=0.08204 | loss=0.0525 | sps=7,158 | ent=0.0065 | log_std=-1.656 | t=3045s *** BALANCED WALKING ***
+[0199/1525] steps=19,562,496 | rew=0.08208 | loss=0.0537 | sps=7,180 | ent=0.0065 | log_std=-1.656 | t=3059s *** BALANCED WALKING ***
+[0200/1525] steps=19,660,800 | rew=0.08221 | loss=0.0538 | sps=7,098 | ent=0.0065 | log_std=-1.655 | t=3072s *** BALANCED WALKING ***
+-> GitHub REST API push OK (step=19,660,800)
+[0201/1525] steps=19,759,104 | rew=0.08245 | loss=0.0543 | sps=7,176 | ent=0.0064 | log_std=-1.655 | t=3089s *** BALANCED WALKING ***
