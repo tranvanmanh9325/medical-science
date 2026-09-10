@@ -18,7 +18,7 @@ concurrency:
 jobs:
   keep-alive:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 360
     permissions:
       contents: write
       actions: write
@@ -77,15 +77,17 @@ jobs:
           python -u training/colab_relay.py
 
       - name: Re-trigger workflow for continuous training
-        # Only re-trigger on success or failure (relay exited normally/error).
-        # NOT on cancellation (user manually stopped or concurrency replaced it).
-        # The concurrency group ensures only 1 run at a time — no cascades.
-        if: success() || failure()
+        # Soft timeout in colab_relay.py exits cleanly with code 0 (success) at 5h 30m.
+        # Only re-trigger on success:
+        # - NOT on cancellation (user manually clicked Cancel in UI -> stops cleanly).
+        # - NOT on failure (script crashed with error -> prevents infinite loop).
+        # - NOT on completion (/tmp/training_complete flag found -> stops cleanly).
+        if: success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ ! -f /tmp/training_complete ]; then
-            echo "Re-triggering Colab Cloud Keeper for continued training..."
+            echo "Re-triggering Colab Cloud Keeper for continuous training..."
             gh workflow run "Colab Cloud Keeper" --repo ${{ github.repository }}
           else
             echo "Training complete flag found — not re-triggering."

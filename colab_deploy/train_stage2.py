@@ -500,7 +500,17 @@ for it in range(start_it, N_ITERS + 1):
         print(f"  -> latest: {latest_ck}", flush=True)
 
         # Push checkpoint to GitHub via REST API (no git clone needed)
-        gh_token = os.environ.get("GITHUB_TOKEN", "")
+        gh_token = ""
+        token_file = "/content/github_token.txt"
+        if os.path.exists(token_file):
+            try:
+                with open(token_file, "r", encoding="utf-8") as tf:
+                    gh_token = tf.read().strip()
+            except Exception:
+                pass
+        if not gh_token:
+            gh_token = os.environ.get("GITHUB_TOKEN", "")
+
         if gh_token:
             try:
                 import base64, urllib.request, json as _json

@@ -49,6 +49,12 @@ SESSION_NAME = "stage2-train"
 LOCAL_CKPT_DIR = os.path.join(ROOT, "colab_output", "checkpoints_stage2")
 os.makedirs(LOCAL_CKPT_DIR, exist_ok=True)
 
+START_TIME = time.time()
+# Soft timeout: 5 hours 30 minutes (330 minutes). Workflow hard limit is 360 minutes (6 hours).
+# Leaves 30 minutes buffer for graceful checkpoint sync, commit, and triggering next workflow run.
+MAX_RELAY_SECONDS = int(os.environ.get("MAX_RELAY_SECONDS", 330 * 60))
+TRAINING_COMPLETE_FILE = "/tmp/training_complete"
+
 
 def get_github_token():
     token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -63,38 +69,76 @@ def get_github_token():
 
 
 def pull_git_latest():
-    '''Syncs latest commits from git repository'''
+    '''Syncs latest commits from git repository cleanly without merge conflicts'''
     try:
-        subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=ROOT, capture_output=True)
+        subprocess.run(["git", "rebase", "--abort"], cwd=ROOT, capture_output=True)
+        subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
+        subprocess.run(["git", "fetch", "origin", "main"], cwd=ROOT, capture_output=True)
+        subprocess.run(["git", "reset", "--hard", "origin/main"], cwd=ROOT, capture_output=True)
     except Exception:
         pass
 
 
-def git_commit_and_push(file_paths, message):
-    '''Commits and pushes files to GitHub repository with robust conflict resolution'''
-    try:
-        if isinstance(file_paths, str):
-            file_paths = [file_paths]
-        valid_paths = []
-        for p in file_paths:
-            abs_path = os.path.join(ROOT, p)
-            if os.path.exists(abs_path):
-                valid_paths.append(p)
+def git_commit_and_push(file_paths, message, retries=3):
+    '''
+    Commits and pushes files to GitHub repository with robust conflict resolution.
+    Uses 'fetch + reset origin/main' strategy to guarantee that binary files (.npz)
+    never undergo a 3-way git rebase/merge, completely eliminating git conflict exit status 1.
+    '''
+    if isinstance(file_paths, str):
+        file_paths = [file_paths]
+
+    valid_paths = [p for p in file_paths if os.path.exists(os.path.join(ROOT, p))]
+    if not valid_paths:
+        return
+
+    for attempt in range(1, retries + 1):
+        try:
+            # 1. Clean up any stuck rebase or merge state from previous failures
+            subprocess.run(["git", "rebase", "--abort"], cwd=ROOT, capture_output=True)
+            subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
+
+            # 2. Fetch latest changes from remote origin/main
+            fetch_res = subprocess.run(["git", "fetch", "origin", "main"], cwd=ROOT, capture_output=True, text=True)
+            if fetch_res.returncode != 0:
+                print(f"[GIT FETCH WARNING] {fetch_res.stderr.strip()}", flush=True)
+
+            # 3. Soft reset HEAD to origin/main (moves HEAD, keeps all working tree files intact on disk)
+            subprocess.run(["git", "reset", "origin/main"], cwd=ROOT, capture_output=True)
+
+            # 4. Stage only the target files
+            for p in valid_paths:
                 subprocess.run(["git", "add", "-f", p], cwd=ROOT, check=True, capture_output=True)
-        if not valid_paths:
-            return
-        res = subprocess.run(["git", "commit", "-m", f"{message} [skip ci]"], cwd=ROOT, capture_output=True, text=True)
-        if "nothing to commit" not in res.stdout and "nothing to commit" not in res.stderr:
-            subprocess.run(["git", "pull", "--rebase", "-Xtheirs", "origin", "main"], cwd=ROOT, capture_output=True)
+
+            # 5. Check if anything is actually staged
+            diff_res = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=ROOT)
+            if diff_res.returncode == 0:
+                print(f"[GIT] Không có thay đổi mới so với remote origin/main.", flush=True)
+                return
+
+            # 6. Commit
+            commit_res = subprocess.run(
+                ["git", "commit", "-m", f"{message} [skip ci]"],
+                cwd=ROOT, capture_output=True, text=True
+            )
+            if commit_res.returncode != 0:
+                if "nothing to commit" in commit_res.stdout or "nothing to commit" in commit_res.stderr:
+                    print(f"[GIT] Không có thay đổi mới cần commit.", flush=True)
+                    return
+                print(f"[GIT COMMIT WARNING] {commit_res.stderr.strip()}", flush=True)
+                return
+
+            # 7. Push to origin main
             push_res = subprocess.run(["git", "push", "origin", "main"], cwd=ROOT, capture_output=True, text=True)
-            if push_res.returncode != 0:
-                subprocess.run(["git", "pull", "--rebase", "-Xtheirs", "origin", "main"], cwd=ROOT, capture_output=True)
-                subprocess.run(["git", "push", "origin", "main"], cwd=ROOT, check=True, capture_output=True)
-            print(f"[GIT PUSH OK] Đã đẩy {len(valid_paths)} tệp lên GitHub: {message}", flush=True)
-        else:
-            print(f"[GIT] Không có thay đổi mới cần commit.", flush=True)
-    except Exception as e:
-        print(f"[GIT PUSH WARNING] Không thể đẩy lên git: {e}", flush=True)
+            if push_res.returncode == 0:
+                print(f"[GIT PUSH OK] Đã đẩy {len(valid_paths)} tệp lên GitHub: {message}", flush=True)
+                return
+            else:
+                print(f"[GIT PUSH RETRY {attempt}/{retries}] Push thất bại: {push_res.stderr.strip()[:200]}", flush=True)
+                time.sleep(3)
+        except Exception as e:
+            print(f"[GIT PUSH WARNING] Lỗi đẩy git (lần {attempt}/{retries}): {e}", flush=True)
+            time.sleep(3)
 
 
 def parse_npz_step_and_it(ckpt_bytes):
@@ -228,15 +272,21 @@ def update_checkpoint_history_files(acc_name, log_content, is_final=False):
 
 def sync_colab_github_token(acc_name):
     '''
-    Ensures that /content/medical_science_repo on Colab always has a valid, fresh GITHUB_TOKEN.
-    Since GitHub Actions job tokens expire when a run ends, this dynamically injects the active
-    runner's token into Colab so internal git operations on Colab never fail with exit code 128.
+    Ensures that Colab always has a valid, fresh GITHUB_TOKEN.
+    Writes token to /content/github_token.txt so background training script (train_stage2.py)
+    can dynamically reload fresh tokens across workflow handovers, and updates
+    git remote in /content/medical_science_repo.
     '''
     gh_token = os.environ.get("GITHUB_TOKEN", "").strip()
     if not gh_token:
         return
     code = f'''
 import os, subprocess
+try:
+    with open("/content/github_token.txt", "w", encoding="utf-8") as f:
+        f.write("{gh_token}")
+except Exception:
+    pass
 repo_dir = "/content/medical_science_repo"
 if os.path.exists(repo_dir):
     new_url = "https://x-access-token:{gh_token}@github.com/tranvanmanh9325/medical-science.git"
@@ -900,6 +950,21 @@ def monitor_and_sync(acc_name):
         time.sleep(60)
         cycle += 1
 
+        # Check for graceful soft timeout handoff before GitHub Actions 6-hour ceiling
+        if time.time() - START_TIME >= MAX_RELAY_SECONDS:
+            elapsed_hr = (time.time() - START_TIME) / 3600
+            print("\n" + "=" * 64, flush=True)
+            print(f"[{get_vn_time_str()} | {acc_name}] [GRACEFUL TIMEOUT HANDOFF]", flush=True)
+            print(f"[{get_vn_time_str()} | {acc_name}] Phiên runner đã chạy {elapsed_hr:.2f}h / {MAX_RELAY_SECONDS/3600:.2f}h (ngưỡng an toàn 5h30m).", flush=True)
+            print(f"[{get_vn_time_str()} | {acc_name}] Tiến hành đồng bộ checkpoint và lưu log cuối cùng trước khi chuyển tiếp...", flush=True)
+            try:
+                sync_remote_checkpoint_rest(acc_name)
+            except Exception as e:
+                print(f"[HANDOFF SYNC WARNING] {e}", flush=True)
+            print(f"[{get_vn_time_str()} | {acc_name}] Bàn giao phiên sạch (Exit 0) để GitHub Actions tự động kích hoạt phiên tiếp theo!", flush=True)
+            print("=" * 64 + "\n", flush=True)
+            return "TIMEOUT_HANDOFF"
+
         # Proactive OAuth & Proxy token refresh every 10 minutes (600 seconds)
         if cycle % 10 == 0:
             print(f"[{get_vn_time_str()} | {acc_name}] [PROACTIVE AUTH] Tự động gia hạn OAuth token và Proxy token...", flush=True)
@@ -1083,10 +1148,18 @@ def run_relay():
         else:
             acc = colab_pool.get_next_available_account()
 
+        # Check if overall runner timeout reached
+        if time.time() - START_TIME >= MAX_RELAY_SECONDS:
+            print(f"[RELAY] Hết thời gian phiên (5h30m) trong vòng lặp điều phối. Thoát sạch (mã 0) để bàn giao...", flush=True)
+            sys.exit(0)
+
         if not acc:
             print("\n[CẢNH BÁO] Tất cả tài khoản trong Pool hiện đều đang bị Cooldown!")
             print("Đang chờ 10 phút trước khi kiểm tra lại...")
             time.sleep(600)
+            if time.time() - START_TIME >= MAX_RELAY_SECONDS:
+                print(f"[RELAY] Hết thời gian phiên trong lúc chờ cooldown. Bàn giao phiên mới...", flush=True)
+                sys.exit(0)
             continue
 
         switch_account_and_reset(acc)
@@ -1131,8 +1204,16 @@ def run_relay():
 
         res = monitor_and_sync(acc)
         if res == "COMPLETE":
-            print("[RELAY] Hoàn tất toàn bộ nhiệm vụ!")
-            break
+            print("[RELAY] Hoàn tất toàn bộ nhiệm vụ 100%! Tạo cờ kết thúc huấn luyện...")
+            try:
+                with open(TRAINING_COMPLETE_FILE, "w", encoding="utf-8") as f:
+                    f.write("DONE")
+            except Exception:
+                pass
+            sys.exit(0)
+        elif res == "TIMEOUT_HANDOFF":
+            print("[RELAY] Bàn giao phiên 5h30m thành công. Thoát sạch (mã 0) để GitHub Actions tự động kích hoạt phiên kế tiếp liên tục.")
+            sys.exit(0)
         elif res == "FAILOVER":
             print("[RELAY] Tiếp tục vòng lặp chuyển giao sang tài khoản kế tiếp...")
             pull_git_latest()

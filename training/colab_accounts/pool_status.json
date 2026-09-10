@@ -1,7 +1,1 @@
-{
-  "account_1": {
-    "cooldown_until": 1788785649.0566068,
-    "exhausted_at": "2026-09-07 07:54:09",
-    "reason": "GPU Quota Limit (503 / outcome: 2)"
-  }
-}
+{}
