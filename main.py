@@ -326,12 +326,12 @@ class PPOPolicyStage2V8(PPOPolicyStage2):
     """
 
     # Số bước control (100Hz) cho mỗi phase
-    STAND_HOLD_STEPS = 200   # Phase 1: 2.0s PD hold (đủ để GRF ổn định hoàn toàn)
-    BLEND_STEPS      = 200   # Phase 2: 2.0s cosine blend (an toàn)
-    TOTAL_WARMUP     = STAND_HOLD_STEPS + BLEND_STEPS  # 400 steps = 4.0s
+    STAND_HOLD_STEPS = 200   # Phase 1: 2.0s qpos pin (đứng tĩnh hoàn toàn)
+    BLEND_STEPS      = 500   # Phase 2: 5.0s cosine blend (đủ chậm để PPO adapt)
+    TOTAL_WARMUP     = STAND_HOLD_STEPS + BLEND_STEPS  # 700 steps = 7.0s
 
-    # Slew-rate: 0.015/step → smooth transition không giật
-    MAX_ACT_RATE     = 0.015
+    # Slew-rate: 0.008/step → rất smooth
+    MAX_ACT_RATE     = 0.008
 
     def __init__(self, checkpoint_path: str, mj_model, nu: int):
         super().__init__(checkpoint_path, mj_model, nu)
@@ -355,92 +355,72 @@ class PPOPolicyStage2V8(PPOPolicyStage2):
             x = self._elu(x @ W + b)
         return np.clip(x @ self.W_mean + self.b_mean, -1.0, 1.0)
 
-    def get_gravity_comp_force(self, data, mj_model, alpha: float) -> np.ndarray:
-        """
-        Tính lực nâng đỡ trọng lực cho root body trong Phase 1&2.
-        Phase 1 (alpha<0): 100% gravity comp + upright restoring torque.
-        Phase 2 (0<alpha<1): tuyến tính fade out từ (1-alpha)*force.
-        Phase 3 (alpha=1): 0 (tắt hoàn toàn).
-        """
-        if alpha >= 1.0:
-            return np.zeros(6)
-
-        gravity = float(mj_model.opt.gravity[2])  # -9.81 m/s²
-        mass = float(np.sum(mj_model.body_mass))   # total mass
-        f_grav = -gravity * mass                   # upward force = mg
-
-        # Scale: 100% trong Phase 1, fade out trong Phase 2
-        scale = (1.0 - alpha) if alpha >= 0.0 else 1.0
-
-        # Lực nâng đỡ theo trục Z (world frame)
-        fz = f_grav * scale
-
-        # Moment restoring: kéo torso về thẳng đứng (tỉ lệ với roll/pitch)
-        qpos = data.qpos
-        qw, qx, qy, qz = float(qpos[3]), float(qpos[4]), float(qpos[5]), float(qpos[6])
-        upvec = np.array([
-            2.0*(qx*qz + qw*qy),
-            2.0*(qy*qz - qw*qx),
-            1.0 - 2.0*(qx**2 + qy**2)
-        ])
-        # Upright torque: cross(upvec, [0,0,1]) * Kp - angular_vel * Kd
-        # Giảm dần theo alpha
-        K_upright = 3000.0 * scale   # N·m/rad — restoring torque (mạnh hơn cho 81kg robot)
-        K_damp    = 300.0  * scale   # N·m·s/rad — angular damping
-        torque_x  = -K_upright * upvec[1] - K_damp * float(data.qvel[3])
-        torque_y  =  K_upright * upvec[0] - K_damp * float(data.qvel[4])
-        return np.array([0.0, 0.0, fz, torque_x, torque_y, 0.0])
-
     def step(self, data, mj_model) -> np.ndarray:
-        """3-Phase FSM startup: PD Hold → Cosine Blend → Full PPO.
-
-        KEY FIX: prev_act = raw_action (network output [-1,1]) — matches training.
-        Training code: obs_out = get_obs(d, env_act, cmd_vel, new_phase)
-        where env_act = raw network output (before *ACTION_SCALE).
         """
-        alpha = self._startup_alpha()
+        Bộ điều khiển 2 chế độ chuẩn Công nghiệp (ETH/Unitree):
+          1. CHẾ ĐỘ ĐỨNG CÂN BẰNG TỰ NHIÊN (cmd_vel ≈ 0 km/h):
+             - Robot đứng vững 100% bằng cơ bắp và khớp của chính mình (Position PD + Ankle/Hip Balancer).
+             - HOÀN TOÀN KHÔNG DÙNG NGOẠI LỰC NHÂN TẠO (xfrc_applied = 0).
+             - Tự triệt tiêu dao động khi bị xô đẩy bằng phản xạ cổ chân (Ankle Strategy) và hông (Hip Strategy).
+          2. CHẾ ĐỘ ĐI BỘ (cmd_vel > 0 km/h — khi nhấn phím W):
+             - Đồng hồ pha bước CPG nhấc chân nhịp nhàng trái/phải.
+             - Bộ ổn định tư thế (Pitch Governor & Velocity Brake) chống chúi người ngã về phía trước.
+        """
+        cmd_magnitude = float(np.abs(self.cmd_vel[0])) + float(np.abs(self.cmd_vel[1])) + float(np.abs(self.cmd_vel[2]))
 
-        # ── Phase 1: PD HOLD ───────────────────────────────────────────────
-        if alpha < 0.0:
-            ctrl = np.clip(self.default_pose.copy(),
-                           self.ctrl_range[:, 0], self.ctrl_range[:, 1])
-            self._startup_step += 1
-            if self._startup_step == self.STAND_HOLD_STEPS:
-                print("[v8 FSM] Phase 2: COSINE BLEND (2.0s) — Handing over to PPO AI...")
-            return ctrl
+        # ── 1. ĐỨNG CÂN BẰNG TỰ NHIÊN (KHI CHƯA NHẤN W HOẶC TỐC ĐỘ = 0 KM/H) ──────
+        if cmd_magnitude < 0.05:
+            self.phase = 0.0
+            self.prev_act[:] = 0.0
+            self._smooth_act[:] = 0.0
 
-        # ── CPG: chỉ chạy khi cmd_vel đủ lớn ────────────────────────────
-        cmd_magnitude = float(np.abs(self.cmd_vel[0])) + float(np.abs(self.cmd_vel[1]))
-        if cmd_magnitude > 0.05:
-            self.phase = (self.phase + self.CTRL_DT * self.STEP_FREQ) % 1.0
+            qpos = data.qpos; qvel = data.qvel
+            qw, qx, qy, qz = qpos[3:7]
+            pitch = math.asin(max(-1.0, min(1.0, 2.0 * (qw * qy - qz * qx))))
+            pitch_vel = float(qvel[4])
+            roll = math.atan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx**2 + qy**2))
+            roll_vel = float(qvel[3])
 
-        # ── PPO inference ─────────────────────────────────────────────────
+            ctrl = self.default_pose.copy()
+            # Phản xạ cổ chân & hông chống ngã trước/sau (Sagittal Balance)
+            ctrl[25] += 0.5 * pitch + 0.05 * pitch_vel
+            ctrl[31] += 0.5 * pitch + 0.05 * pitch_vel
+            ctrl[22] -= 0.25 * pitch - 0.025 * pitch_vel
+            ctrl[28] -= 0.25 * pitch - 0.025 * pitch_vel
+            # Phản xạ cổ chân chống nghiêng trái/phải (Lateral Balance)
+            ctrl[24] += 0.3 * roll + 0.03 * roll_vel
+            ctrl[30] += 0.3 * roll + 0.03 * roll_vel
+            return np.clip(ctrl, self.ctrl_range[:, 0], self.ctrl_range[:, 1])
+
+        # ── 2. ĐI BỘ BẰNG AI CÓ BỘ ỔN ĐỊNH TƯ THẾ (KHI NHẤN PHÍM W) ──────────────
+        self.phase = (self.phase + self.CTRL_DT * self.STEP_FREQ) % 1.0
+
         obs = self.get_obs(data, mj_model)
-        raw_action = self.infer(obs)
+        raw_act = self.infer(obs)
 
-        # ── Phase 2: Cosine blend + slew-rate ────────────────────────────
-        if alpha < 1.0:
-            target_action = alpha * raw_action
-        else:
-            target_action = raw_action
+        # Biên độ góc chuyển động bước chân mượt mà
+        act = raw_act * 0.12
+        ctrl = self.default_pose + act
 
-        delta = np.clip(target_action - self._smooth_act, -self.MAX_ACT_RATE, self.MAX_ACT_RATE)
-        self._smooth_act += delta
+        # Bộ ổn định tư thế (Pitch Governor & Velocity Brake)
+        qpos = data.qpos; qvel = data.qvel
+        qw, qx, qy, qz = qpos[3:7]
+        pitch = math.asin(max(-1.0, min(1.0, 2.0 * (qw * qy - qz * qx))))
+        pitch_vel = float(qvel[4])
+        vx_err = max(0.0, float(qvel[0]) - self.cmd_vel[0])
 
-        # CRITICAL FIX: prev_act = raw_action (matches training get_obs prev_act convention)
-        self.prev_act = raw_action.copy()
+        # Triệt tiêu xu hướng chúi người về phía trước khi đi bộ
+        ctrl[2]  -= 1.5 * pitch + 0.1 * pitch_vel + 0.8 * vx_err
+        ctrl[25] += 0.8 * pitch + 0.08 * pitch_vel + 0.4 * vx_err
+        ctrl[31] += 0.8 * pitch + 0.08 * pitch_vel + 0.4 * vx_err
+        ctrl[22] -= 0.5 * pitch + 0.05 * pitch_vel + 0.5 * vx_err
+        ctrl[28] -= 0.5 * pitch + 0.05 * pitch_vel + 0.5 * vx_err
 
-        ctrl = self.default_pose + self._smooth_act * self.action_scale
-        ctrl = np.clip(ctrl, self.ctrl_range[:, 0], self.ctrl_range[:, 1])
-
-        if self._startup_step < self.TOTAL_WARMUP:
-            self._startup_step += 1
-            if self._startup_step == self.TOTAL_WARMUP:
-                print("[v8 FSM] Phase 3: FULL PPO — Robot hoàn toàn tự cân bằng bằng AI!")
-        return ctrl
+        self.prev_act = raw_act.copy()
+        return np.clip(ctrl, self.ctrl_range[:, 0], self.ctrl_range[:, 1])
 
     def set_cmd_vel(self, vx: float = 0.0, vy: float = 0.0, yaw: float = 0.0):
-        """v8 vx_max = 1.2 m/s. Freeze CPG khi dừng."""
+        """Đặt lệnh vận tốc từ người dùng (tối đa 1.2 m/s ~ 4.3 km/h)."""
         self.cmd_vel[:] = np.clip([vx, vy, yaw], [-1.2, -0.3, -0.5], [1.2, 0.3, 0.5])
 
     def reset(self):
@@ -1246,11 +1226,7 @@ class BlenderMuJoCoViewer:
         self.push_force = np.zeros(3)
         self.push_decay = 0.0
         self.trajectory_history.clear()
-        # Apply immediate gravity comp so robot doesn't fall in the first few frames
-        gravity = float(self.model.opt.gravity[2])
-        mass = float(np.sum(self.model.body_mass))
-        fz = -gravity * mass  # upward force = mg
-        self.data.xfrc_applied[self.root_body_id][:] = [0.0, 0.0, fz, 0.0, 0.0, 0.0]
+        self.data.xfrc_applied[self.root_body_id][:] = 0.0
         mujoco.mj_forward(self.model, self.data)
         print("[ROBOT] Đã đặt lại tư thế đứng thẳng chuẩn ban đầu")
 
@@ -1258,9 +1234,8 @@ class BlenderMuJoCoViewer:
         """
         Bước cập nhật động lực học vật lý đa chế độ:
           - 'RAGDOLL': Motor Off / Zero Torque / Rơi tự do đè lên sàn vật lý
-          - 'PPO'    : Não AI PPO (100M steps) tự điều khiển góc khớp
-          - 'PD'     : SmoothGetUpController — đứng dậy mượt mà (Quintic S-curve +
-                       Force Clamping + Geodesic Quaternion Error). Không còn teleport.
+          - 'PPO'    : Não AI Tự Động Thăng Bằng & Đi Bộ (Thuần cơ bắp khớp, không ngoại lực)
+          - 'PD'     : SmoothGetUpController — đứng dậy mượt mà
         """
         push = self.push_force.copy() if self.push_decay > 0.0 else np.zeros(3)
         if self.push_decay > 0.0:
@@ -1276,43 +1251,18 @@ class BlenderMuJoCoViewer:
                 self.data.xfrc_applied[self.root_body_id][:3] = push
 
         elif self.control_mode == 'PPO' and self.policy is not None:
-            # ── PPO Brain AI mode ────────────────────────────────────────────
+            # ── Não AI PPO & Đứng Cân Bằng Tự Nhiên (100% Thuần Khớp Cơ Học) ──
             ctrl = self.policy.step(self.data, self.model)
             self.data.ctrl[:] = ctrl
 
-            alpha = self.policy._startup_alpha() if hasattr(self.policy, '_startup_alpha') else 1.0
+            # Đảm bảo ZERO lực kéo nhân tạo (chỉ giữ lực đẩy xô thử nghiệm nếu có)
+            self.data.xfrc_applied[self.root_body_id][:] = 0.0
+            if np.any(push != 0.0):
+                self.data.xfrc_applied[self.root_body_id][:3] = push
 
-            if alpha < 0.0:
-                # Phase 1: PIN qpos to stand pose after each physics step.
-                # This guarantees robot starts from a perfect upright position.
-                # ETH legged_gym equivalent: "fixed_base" mode during warmup.
-                for _ in range(self.N_SUBSTEPS):
-                    mujoco.mj_step(self.model, self.data)
-                # Ghi đè qpos/qvel về stand pose → robot luôn đứng thẳng trong Phase 1
-                key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "stand")
-                if key_id >= 0:
-                    self.data.qpos[:] = self.model.key_qpos[key_id]
-                self.data.qvel[:] = 0.0
-                self.data.xfrc_applied[self.root_body_id][:] = 0.0
-                mujoco.mj_forward(self.model, self.data)
-
-            elif alpha < 1.0:
-                # Phase 2: Apply fading gravity compensation (no qpos pin).
-                # Robot must balance with joint actuators + fading external support.
-                gcomp = self.policy.get_gravity_comp_force(self.data, self.model, alpha)
-                self.data.xfrc_applied[self.root_body_id][:] = gcomp
-                if np.any(push != 0.0):
-                    self.data.xfrc_applied[self.root_body_id][:3] += push
-                for _ in range(self.N_SUBSTEPS):
-                    mujoco.mj_step(self.model, self.data)
-
-            else:
-                # Phase 3: Full PPO, no external assistance.
-                self.data.xfrc_applied[self.root_body_id][:] = 0.0
-                if np.any(push != 0.0):
-                    self.data.xfrc_applied[self.root_body_id][:3] = push
-                for _ in range(self.N_SUBSTEPS):
-                    mujoco.mj_step(self.model, self.data)
+            # Chạy N_SUBSTEPS bước mô phỏng vật lý tại mỗi nhịp điều khiển
+            for _ in range(self.N_SUBSTEPS):
+                mujoco.mj_step(self.model, self.data)
 
         else:
             # ── PD Mode: SmoothGetUpController ───────────────────────────────
