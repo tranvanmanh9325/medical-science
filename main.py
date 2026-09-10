@@ -1280,21 +1280,39 @@ class BlenderMuJoCoViewer:
             ctrl = self.policy.step(self.data, self.model)
             self.data.ctrl[:] = ctrl
 
-            # Gravity compensation + upright restoring force trong Phase 1 & 2
-            # Tắt hoàn toàn khi Phase 3 (alpha=1.0) để PPO hoàn toàn tự chủ
             alpha = self.policy._startup_alpha() if hasattr(self.policy, '_startup_alpha') else 1.0
-            if alpha < 1.0:
+
+            if alpha < 0.0:
+                # Phase 1: PIN qpos to stand pose after each physics step.
+                # This guarantees robot starts from a perfect upright position.
+                # ETH legged_gym equivalent: "fixed_base" mode during warmup.
+                for _ in range(self.N_SUBSTEPS):
+                    mujoco.mj_step(self.model, self.data)
+                # Ghi đè qpos/qvel về stand pose → robot luôn đứng thẳng trong Phase 1
+                key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "stand")
+                if key_id >= 0:
+                    self.data.qpos[:] = self.model.key_qpos[key_id]
+                self.data.qvel[:] = 0.0
+                self.data.xfrc_applied[self.root_body_id][:] = 0.0
+                mujoco.mj_forward(self.model, self.data)
+
+            elif alpha < 1.0:
+                # Phase 2: Apply fading gravity compensation (no qpos pin).
+                # Robot must balance with joint actuators + fading external support.
                 gcomp = self.policy.get_gravity_comp_force(self.data, self.model, alpha)
                 self.data.xfrc_applied[self.root_body_id][:] = gcomp
+                if np.any(push != 0.0):
+                    self.data.xfrc_applied[self.root_body_id][:3] += push
+                for _ in range(self.N_SUBSTEPS):
+                    mujoco.mj_step(self.model, self.data)
+
             else:
+                # Phase 3: Full PPO, no external assistance.
                 self.data.xfrc_applied[self.root_body_id][:] = 0.0
-
-            if np.any(push != 0.0):
-                self.data.xfrc_applied[self.root_body_id][:3] += push
-
-            # Run N_SUBSTEPS physics steps with fixed ctrl (same as training)
-            for _ in range(self.N_SUBSTEPS):
-                mujoco.mj_step(self.model, self.data)
+                if np.any(push != 0.0):
+                    self.data.xfrc_applied[self.root_body_id][:3] = push
+                for _ in range(self.N_SUBSTEPS):
+                    mujoco.mj_step(self.model, self.data)
 
         else:
             # ── PD Mode: SmoothGetUpController ───────────────────────────────
