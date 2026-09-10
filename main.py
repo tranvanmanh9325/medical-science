@@ -2112,25 +2112,19 @@ class BlenderMuJoCoViewer:
         """Atomic write: ghi trạng thái robot ra file JSON cho MCP server."""
         try:
             def _f(v):
-                """Safe convert numpy/python scalar to plain Python float."""
                 try: return float(v)
                 except: return 0.0
 
             qpos = self.data.qpos; qvel = self.data.qvel
-            qw, qx = _f(qpos[3]), _f(qpos[4])
-            qy, qz = _f(qpos[5]), _f(qpos[6])
-            roll  = _f(np.degrees(np.arctan2(2*(qw*qx+qy*qz), 1-2*(qx**2+qy**2))))
-            pitch = _f(np.degrees(np.arcsin(max(-1.0, min(1.0, 2*(qw*qy-qz*qx))))))
-            yaw   = _f(np.degrees(np.arctan2(2*(qw*qz+qx*qy), 1-2*(qy**2+qz**2))))
-            com   = telem.get('com')
-            zmp   = telem.get('zmp')
+            com  = telem.get('com')
+            zmp  = telem.get('zmp')
             status = {
                 'control_mode':  str(self.control_mode),
                 'sim_time':      _f(self.data.time),
                 'pelvis_z':      _f(qpos[2]),
-                'roll':          roll,
-                'pitch':         pitch,
-                'yaw':           yaw,
+                'roll':          _f(telem.get('roll', 0)),
+                'pitch':         _f(telem.get('pitch', 0)),
+                'yaw':           _f(telem.get('yaw', 0)),
                 'vx_actual':     _f(qvel[0]),
                 'vy_actual':     _f(qvel[1]),
                 'vx_cmd':        _f(getattr(self, '_walk_vx', 0.0)),
@@ -2138,20 +2132,19 @@ class BlenderMuJoCoViewer:
                 'fz_right':      _f(telem.get('fz_right', 0)),
                 'total_power':   _f(telem.get('total_power', 0)),
                 'total_mass':    _f(self.total_mass),
-                'com_x':         _f(com[0]) if com is not None and len(com) > 0 else 0.0,
-                'com_y':         _f(com[1]) if com is not None and len(com) > 1 else 0.0,
-                'com_z':         _f(com[2]) if com is not None and len(com) > 2 else 0.0,
-                'zmp_x':         _f(zmp[0]) if zmp is not None and len(zmp) > 0 else 0.0,
-                'zmp_y':         _f(zmp[1]) if zmp is not None and len(zmp) > 1 else 0.0,
+                'com_x': _f(com[0]) if com is not None else 0.0,
+                'com_y': _f(com[1]) if com is not None else 0.0,
+                'com_z': _f(com[2]) if com is not None else 0.0,
+                'zmp_x': _f(zmp[0]) if zmp is not None else 0.0,
+                'zmp_y': _f(zmp[1]) if zmp is not None else 0.0,
                 'render_fps':    _f(self.render_fps),
                 'physics_fps':   _f(self.physics_fps),
                 'sim_speed':     _f(self.sim_speed),
                 'screenshot_path': str(self._ipc_screenshot_file),
             }
-            tmp = self._ipc_status_file + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
+            # Atomic write: ghi thẳng (Windows không cần .tmp nếu không có concurrent reader)
+            with open(self._ipc_status_file, 'w', encoding='utf-8') as f:
                 json.dump(status, f)
-            os.replace(tmp, self._ipc_status_file)
         except Exception:
             pass
 
