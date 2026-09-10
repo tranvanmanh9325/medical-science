@@ -305,38 +305,39 @@ class PPOPolicyStage2(PPOPolicy):
 # ==============================================================================
 class PPOPolicyStage2V8(PPOPolicyStage2):
     """
-    Policy Stage 2 v8: Walking — LINEAR Actor + 3-Phase FSM Startup (Industry Standard).
+    Policy Stage 2 v8: Walking — LINEAR Actor + 3-Phase FSM Startup.
 
-    STARTUP SEQUENCE (ETH legged_gym / Unitree pattern):
-      Phase 1 — PD HOLD (100 steps = 1s):
-        Giữ nguyên default_pose bằng PD. PPO KHÔNG chạy. CPG đóng băng ở pha 0.
-        Mục đích: GRF đạt cân bằng tĩnh, tắt nhiễu cảm biến ban đầu.
+    STARTUP SEQUENCE (ETH legged_gym / Unitree H1 pattern):
+      Phase 1 — PD HOLD (200 steps = 2.0s):
+        Giữ nguyên default_pose bằng PD. PPO KHÔNG chạy.
+        Mục đích: GRF ổn định, velocity noise = 0, robot hoàn toàn tĩnh.
 
-      Phase 2 — COSINE BLEND (150 steps = 1.5s):
-        alpha = 0.5*(1-cos(π*progress)) tăng từ 0→1 (zero-jerk S-curve).
-        Slew-rate limiter: max |Δaction| = 0.03 mỗi bước → tốc độ góc tối đa 0.75 rad/s.
-        prev_act lưu smooth_action (không phải raw action) để obs tiếp theo in-distribution.
+      Phase 2 — COSINE BLEND (200 steps = 2.0s):
+        alpha = 0.5*(1-cos(π*progress)) tăng từ 0→1 (S-curve zero-jerk).
+        Slew-rate: max |Δaction| = 0.015/step → 0.375 rad/s (rất chậm, an toàn).
+        prev_act = raw_action để obs tiếp theo in-distribution với training.
 
       Phase 3 — FULL PPO: policy kiểm soát toàn bộ.
 
-    CPG MANAGEMENT:
-      - cmd_vel ≈ 0: đóng băng phase (tránh xung đột đứng yên vs nhấc chân)
-      - cmd_vel > 0: CPG chạy bình thường ở 1.2 Hz
+    BUG FIX (critical):
+      Training: prev_act = env_act (raw network output trước scale, range [-1,1])
+      Viewer cũ: prev_act = smooth_action (scaled) → obs OOD → action saturation
+      Fix: prev_act = raw_action (network output, range [-1,1])
     """
 
     # Số bước control (100Hz) cho mỗi phase
-    STAND_HOLD_STEPS = 100   # Phase 1: 1.0s PD hold
-    BLEND_STEPS      = 150   # Phase 2: 1.5s cosine blend
-    TOTAL_WARMUP     = STAND_HOLD_STEPS + BLEND_STEPS  # 250 steps = 2.5s
+    STAND_HOLD_STEPS = 200   # Phase 1: 2.0s PD hold (đủ để GRF ổn định hoàn toàn)
+    BLEND_STEPS      = 200   # Phase 2: 2.0s cosine blend (an toàn)
+    TOTAL_WARMUP     = STAND_HOLD_STEPS + BLEND_STEPS  # 400 steps = 4.0s
 
-    # Slew-rate: tối đa thay đổi action 0.03 units/step → 0.03*0.25=0.0075 rad/step
-    MAX_ACT_RATE     = 0.03
+    # Slew-rate: 0.015/step → smooth transition không giật
+    MAX_ACT_RATE     = 0.015
 
     def __init__(self, checkpoint_path: str, mj_model, nu: int):
         super().__init__(checkpoint_path, mj_model, nu)
-        self._startup_step  = 0          # Phase counter
-        self._smooth_act    = np.zeros(nu, dtype=np.float32)  # Slew-rate buffer
-        print("[v8 FSM] Phase 1: PD HOLD (1.0s) — Stabilizing GRF...")
+        self._startup_step  = 0
+        self._smooth_act    = np.zeros(nu, dtype=np.float32)
+        print("[v8 FSM] Phase 1: PD HOLD (2.0s) — Stabilizing GRF...")
 
     def _startup_alpha(self) -> float:
         """Cosine S-curve alpha [0→1] cho Phase 2 blend. Phase 1 trả về -1 (hold mode)."""
@@ -344,7 +345,6 @@ class PPOPolicyStage2V8(PPOPolicyStage2):
             return -1.0   # Signal: return default_pose immediately
         if self._startup_step >= self.TOTAL_WARMUP:
             return 1.0    # Phase 3: full PPO
-        # Phase 2: cosine S-curve (zero initial và final jerk)
         progress = (self._startup_step - self.STAND_HOLD_STEPS) / self.BLEND_STEPS
         return 0.5 * (1.0 - math.cos(math.pi * progress))
 
@@ -356,37 +356,45 @@ class PPOPolicyStage2V8(PPOPolicyStage2):
         return np.clip(x @ self.W_mean + self.b_mean, -1.0, 1.0)
 
     def step(self, data, mj_model) -> np.ndarray:
-        """3-Phase FSM startup: PD Hold → Cosine Blend → Full PPO."""
+        """3-Phase FSM startup: PD Hold → Cosine Blend → Full PPO.
+
+        KEY FIX: prev_act = raw_action (network output [-1,1]) — matches training.
+        Training code: obs_out = get_obs(d, env_act, cmd_vel, new_phase)
+        where env_act = raw network output (before *ACTION_SCALE).
+        """
         alpha = self._startup_alpha()
 
-        # ── Phase 1: PD HOLD — giữ nguyên default_pose, không chạy PPO ──────
+        # ── Phase 1: PD HOLD ───────────────────────────────────────────────
         if alpha < 0.0:
+            # Giữ default_pose, prev_act = zeros (matching training episode reset)
             ctrl = np.clip(self.default_pose.copy(),
                            self.ctrl_range[:, 0], self.ctrl_range[:, 1])
-            # CPG đóng băng tại pha 0 trong Phase 1
             self._startup_step += 1
             if self._startup_step == self.STAND_HOLD_STEPS:
-                print("[v8 FSM] Phase 2: COSINE BLEND (1.5s) — Handing over to PPO AI...")
+                print("[v8 FSM] Phase 2: COSINE BLEND (2.0s) — Handing over to PPO AI...")
             return ctrl
 
-        # ── Phase 2 & 3: PPO inference với slew-rate limiter ─────────────────
-        # CPG: chỉ chạy khi cmd_vel đủ lớn (tránh xung đột đứng yên vs nhấc chân)
+        # ── CPG: chỉ chạy khi cmd_vel đủ lớn ────────────────────────────
         cmd_magnitude = float(np.abs(self.cmd_vel[0])) + float(np.abs(self.cmd_vel[1]))
         if cmd_magnitude > 0.05:
             self.phase = (self.phase + self.CTRL_DT * self.STEP_FREQ) % 1.0
 
+        # ── PPO inference ─────────────────────────────────────────────────
         obs = self.get_obs(data, mj_model)
         raw_action = self.infer(obs)
 
-        # Áp dụng alpha warmup (Phase 2) hoặc full (Phase 3)
-        target_action = alpha * raw_action
+        # ── Phase 2: Cosine blend + slew-rate ────────────────────────────
+        if alpha < 1.0:
+            target_action = alpha * raw_action
+        else:
+            target_action = raw_action
 
-        # Slew-rate limiter: tránh biến thiên đột ngột
         delta = np.clip(target_action - self._smooth_act, -self.MAX_ACT_RATE, self.MAX_ACT_RATE)
         self._smooth_act += delta
 
-        # Lưu smooth_action vào prev_act để obs bước tiếp theo in-distribution
-        self.prev_act = self._smooth_act.copy()
+        # CRITICAL FIX: prev_act = raw_action (matches training get_obs prev_act convention)
+        # Training: obs = get_obs(d, env_act, ...) where env_act is network output [-1,1]
+        self.prev_act = raw_action.copy()
 
         ctrl = self.default_pose + self._smooth_act * self.action_scale
         ctrl = np.clip(ctrl, self.ctrl_range[:, 0], self.ctrl_range[:, 1])
@@ -399,14 +407,14 @@ class PPOPolicyStage2V8(PPOPolicyStage2):
         return ctrl
 
     def set_cmd_vel(self, vx: float = 0.0, vy: float = 0.0, yaw: float = 0.0):
-        """v8 vx_max = 1.2 m/s. Freeze CPG khi dừng (cmd_vel ≈ 0)."""
+        """v8 vx_max = 1.2 m/s. Freeze CPG khi dừng."""
         self.cmd_vel[:] = np.clip([vx, vy, yaw], [-1.2, -0.3, -0.5], [1.2, 0.3, 0.5])
 
     def reset(self):
         super().reset()
         self._startup_step = 0
         self._smooth_act[:] = 0.0
-        print("[v8 FSM] Phase 1: PD HOLD (1.0s) — Stabilizing GRF...")
+        print("[v8 FSM] Phase 1: PD HOLD (2.0s) — Stabilizing GRF...")
 
 
 # ==============================================================================
