@@ -300,6 +300,37 @@ class PPOPolicyStage2(PPOPolicy):
 
 
 # ==============================================================================
+# 0c. PPO POLICY STAGE 2 v8 — LINEAR ACTOR (NO TANH) — 300M STEPS
+# ==============================================================================
+class PPOPolicyStage2V8(PPOPolicyStage2):
+    """
+    Policy Stage 2 v8: Walking — LINEAR Actor (không dùng tanh ở output).
+
+    v8 khác v6: mean = Dense_3(x) — không có tanh wrap. Đây là industry standard
+    (legged_gym / rsl_rl / Isaac Lab) cho unbounded Gaussian policy.
+    action_scale = 0.25, vx_max có thể lên 1.2 m/s.
+
+    Lý do KHÔNG dùng tanh: khi tanh bão hòa → gradient Dense_3 = 0 → actor frozen.
+    Linear output giúp gradient luôn chảy qua lớp output → policy học liên tục.
+    """
+
+    def infer(self, obs: np.ndarray) -> np.ndarray:
+        """v8 forward: LINEAR output — không tanh. Clip action tại [-1, 1] chỉ cho physics."""
+        x = obs.astype(np.float32)
+        for W, b in zip(self.W, self.b):
+            x = self._elu(x @ W + b)
+        # v8: LINEAR — không tanh ở output layer
+        mean   = x @ self.W_mean + self.b_mean
+        # Clip [-1, 1] chỉ để bảo vệ physics boundary (như training: env_act = clip(raw,-1,1))
+        action = np.clip(mean, -1.0, 1.0)
+        return action
+
+    def set_cmd_vel(self, vx: float = 0.0, vy: float = 0.0, yaw: float = 0.0):
+        """v8 vx_max = 1.2 m/s (curriculum đạt full speed sau 200M steps)."""
+        self.cmd_vel[:] = np.clip([vx, vy, yaw], [-1.2, -0.3, -0.5], [1.2, 0.3, 0.5])
+
+
+# ==============================================================================
 # 1. SMOOTH GET-UP CONTROLLER — ĐỨNG DẬY VẬT LÝ MỀM (KHÔNG CÓ TELEPORT)
 # ==============================================================================
 class SmoothGetUpController:
@@ -873,6 +904,24 @@ class BlenderMuJoCoViewer:
         self.model = mujoco.MjModel.from_xml_path(model_path)
         self.data = mujoco.MjData(self.model)
 
+        # ── ĐỒNG BỘ VẬT LÝ VỚI TRAINING (CRITICAL — sim-to-real gap) ─────────
+        # Training dùng: SIM_DT=0.002s, N_SUBSTEPS=5 → CTRL_DT=0.01s, policy 100Hz
+        # XML default: timestep=0.005s → policy 200Hz → robot bị gọi gấp đôi → sụp đổ
+        # Phải set ĐÚNG như train_stage2.py để policy hoạt động đúng distribution.
+        self.SIM_DT     = 0.002   # Simulation timestep (khớp training)
+        self.N_SUBSTEPS = 5       # Physics substeps per control step (khớp training)
+        self.model.opt.timestep      = self.SIM_DT
+        self.model.opt.iterations    = 4
+        self.model.opt.ls_iterations = 4
+        self.model.opt.integrator    = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+        # Contact solver params (khớp training)
+        for i in range(self.model.ngeom):
+            self.model.geom_solref[i, 0] = 0.004
+            self.model.geom_solref[i, 1] = 1.0
+            self.model.geom_solimp[i, :] = [0.9, 0.95, 0.001, 0.5, 2.0]
+        print(f"[PHYSICS SYNC] timestep={self.SIM_DT}s | substeps={self.N_SUBSTEPS} | CTRL_DT={self.SIM_DT*self.N_SUBSTEPS:.3f}s | policy=100Hz")
+        # ─────────────────────────────────────────────────────────────────────
+
         self.model.vis.quality.offsamples = 4
         self.model.vis.quality.shadowsize = 2048
 
@@ -891,7 +940,10 @@ class BlenderMuJoCoViewer:
 
         # Ưu tiên tìm Stage 2 checkpoint trước (walking), sau đó fallback Stage 1 (balance)
         ck_search_paths = [
-            # Colab output (highest priority — most recent training)
+            # v8: 300M steps Linear Actor (highest priority — latest training)
+            os.path.join(project_root, "colab_output", "checkpoints_stage2", "apollo_stage2_v8_final.npz"),
+            os.path.join(project_root, "colab_output", "checkpoints_stage2", "apollo_stage2_v8_latest.npz"),
+            # Colab output legacy
             os.path.join(project_root, "colab_output", "checkpoints_stage2", "apollo_stage2_v6_final.npz"),
             os.path.join(project_root, "colab_output", "checkpoints_stage2", "apollo_stage2_v4_final.npz"),
             os.path.join(project_root, "colab_output", "checkpoints_stage2", "apollo_stage2_final.npz"),
@@ -919,17 +971,23 @@ class BlenderMuJoCoViewer:
                 probe_keys = list(probe.keys())
                 w0_key = next((k for k in probe_keys if "Dense_0" in k and "kernel" in k), None)
                 is_stage2 = (w0_key is not None and probe[w0_key].shape[0] == PPOPolicyStage2.OBS_DIM_S2)
+                # Detect v8 checkpoint by filename (linear actor — no tanh)
+                is_v8 = "v8" in os.path.basename(best_ck)
 
                 if is_stage2:
-                    self.policy = PPOPolicyStage2(best_ck, self.model, self.model.nu)
+                    if is_v8:
+                        self.policy = PPOPolicyStage2V8(best_ck, self.model, self.model.nu)
+                        print(f"[PPO STAGE 2 v8] LINEAR ACTOR — 300M steps đã nạp!")
+                        print(f"  File: {os.path.basename(best_ck)}")
+                        print(f"  Phím W/S: Tiến/Lùi (vx_max=1.2 m/s) | A/D: Sang trái/phải | Q/E: Xoay | X: Dừng")
+                    else:
+                        self.policy = PPOPolicyStage2(best_ck, self.model, self.model.nu)
+                        print(f"[PPO STAGE 2] Checkpoint đi bộ đã nạp thành công!")
+                        print(f"  Phím W/S: Tiến/Lùi | A/D: Sang trái/phải | Q/E: Xoay trái/phải | X: Dừng")
                     stage2_loaded = True
-                    print(f"[PPO STAGE 2] Checkpoint đi bộ đã nạp thành công!")
-                    print(f"  Phím W/S: Tiến/Lùi | A/D: Sang trái/phải | Q/E: Xoay trái/phải | X: Dừng")
-                    # FIX: policy was trained with cmd_vel in [0,0.2]->[0,1.0] range.
-                    # cmd_vel=[0,0,0] is out-of-distribution → robot falls immediately.
-                    # Default to 0.3 m/s forward so policy starts in-distribution.
-                    self.policy.set_cmd_vel(vx=0.3, vy=0.0, yaw=0.0)
-                    print(f"  [DEFAULT CMD] vx=0.3 m/s | Nhấn W để tăng, S để giảm, X để dừng")
+                    # Default vx=0.0 để policy khởi đầu in-distribution (tránh ngã ngay)
+                    self.policy.set_cmd_vel(vx=0.0, vy=0.0, yaw=0.0)  # Standing mode by default
+                    print(f"  [DEFAULT CMD] vx=0.0 m/s | Nhấn W để tăng, S để giảm, X để dừng")
                 else:
                     self.policy = PPOPolicy(best_ck, self.model, self.model.nu)
                     print(f"[PPO STAGE 1] Brain AI cân bằng đã nạp! Phím B: Não AI/PD")
@@ -942,8 +1000,8 @@ class BlenderMuJoCoViewer:
             print("[PPO] Chạy: python training/download_checkpoints.py")
 
         # Lệnh vận tốc từ người dùng (WASD) — chỉ dùng khi policy là Stage 2
-        # FIX: default vx=0.3 (in-distribution) khi Stage 2 loaded, tránh OOD fall
-        self._walk_vx  = 0.3 if stage2_loaded else 0.0
+        # FIX: default vx=0.0 (in-distribution) khi Stage 2 loaded, tránh OOD fall
+        self._walk_vx  = 0.0  # Start standing still — user presses W to walk
         self._walk_vy  = 0.0
         self._walk_yaw = 0.0
         self._stage2_loaded = stage2_loaded
@@ -1085,19 +1143,22 @@ class BlenderMuJoCoViewer:
 
         elif self.control_mode == 'PPO' and self.policy is not None:
             # ── PPO Brain AI mode ────────────────────────────────────────────
-            # Training: mjx.step once per policy step at model.opt.timestep=0.005s → 200Hz.
-            # Viewer: mj_step at same 0.005s → call policy every step → MATCHES training.
+            # Training: policy runs at CTRL_DT=0.01s (5 substeps × SIM_DT=0.002s)
+            # Must call policy ONCE then step physics N_SUBSTEPS=5 times.
+            # Calling policy every single sim step = 2.5x oversampling → thrashing!
             ctrl = self.policy.step(self.data, self.model)
             self.data.ctrl[:] = ctrl
             self.data.xfrc_applied[self.root_body_id][:] = 0.0
             if np.any(push != 0.0):
                 self.data.xfrc_applied[self.root_body_id][:3] = push
+            # Run N_SUBSTEPS physics steps with fixed ctrl (same as training)
+            for _ in range(self.N_SUBSTEPS):
+                mujoco.mj_step(self.model, self.data)
 
         else:
             # ── PD Mode: SmoothGetUpController ───────────────────────────────
             self.recovery_ctrl.step(push_force=push)
-
-        mujoco.mj_step(self.model, self.data)
+            mujoco.mj_step(self.model, self.data)
 
         if self.frame_count % 3 == 0:
             self.trajectory_history.append(self.data.qpos[:3].copy())
@@ -1302,22 +1363,17 @@ class BlenderMuJoCoViewer:
                 self.control_mode = "PPO" if (self.policy is not None) else "PD"
                 print(f"[DAT LAI] Robot da ve tu the dung thang chuan. Che do: {self.control_mode}")
 
-            # Phím B: Chuyển đổi giữa Não AI PPO ↔ Bộ cân bằng PD mượt mà
+            # Phím B: Ragdoll test (bật/tắt motor)
             elif key == glfw.KEY_B:
-                if self.policy is not None:
-                    self.control_mode = "PD" if self.control_mode == "PPO" else "PPO"
-                    mode_str = "NAO AI PPO (v15, 100M steps)" if self.control_mode == "PPO" else "PD CAN BANG MEM (Smooth Recovery)"
-                    print(f"[CHE DO DIEU KHIEN] {mode_str}")
-                    # Nếu chuyển sang PD và robot đang không đứng thẳng → kích hoạt get-up
-                    if self.control_mode == "PD":
-                        tilt = abs(self.data.qpos[4]) + abs(self.data.qpos[5])
-                        z_dev = abs(self.data.qpos[2] - self.nominal_root_z)
-                        if tilt > 0.15 or z_dev > 0.05:
-                            self.recovery_ctrl.start_recovery()
-                    if self.policy is not None:
+                if self.control_mode == 'RAGDOLL':
+                    self.control_mode = 'PPO' if self.policy is not None else 'PD'
+                    if self.policy:
                         self.policy.reset()
+                    self._reset_robot()
+                    print('[CHẾ ĐỘ] Bật lại PPO AI — robot tự đứng cân bằng.')
                 else:
-                    print("[PPO] Chua co checkpoint! Chay: python training/download_checkpoints.py")
+                    self.control_mode = 'RAGDOLL'
+                    print('[CHẾ ĐỘ] RAGDOLL — motor tắt, robot rơi tự do.')
 
             # Phím K: Sập nguồn điện / Ragdoll Mode — nhấn lại để khởi động đứng dậy mượt mà
             elif key == glfw.KEY_K:
@@ -1347,10 +1403,10 @@ class BlenderMuJoCoViewer:
             # Stage 1: Mũi tên = lực đẩy thử nghiệm | Stage 2: WASD = velocity command
             elif key == glfw.KEY_W:
                 if self._stage2_loaded and self.control_mode == "PPO":
-                    self._walk_vx = min(self._walk_vx + 0.1, 0.8)
+                    self._walk_vx = min(self._walk_vx + 0.1, 1.2)  # v8 trained to 1.2 m/s
                     if isinstance(self.policy, PPOPolicyStage2):
                         self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
-                    print(f"[ĐI BỘ] Lệnh: vx={self._walk_vx:.1f}m/s, vy={self._walk_vy:.1f}m/s, yaw={self._walk_yaw:.1f}rad/s")
+                    print(f"[ĐI BỘ] vx={self._walk_vx:.1f} m/s ({self._walk_vx*3.6:.1f} km/h) | vy={self._walk_vy:.1f} m/s | yaw={self._walk_yaw:.2f} rad/s")
                 else:
                     self.inject_perturbation(fx=150.0)
 
@@ -1358,10 +1414,10 @@ class BlenderMuJoCoViewer:
                 if self._stage2_loaded and self.control_mode == "PPO":
                     # FIX: clamp vx to 0.1 minimum — policy not trained below 0 (OOD → falls)
                     # Use 0.1 as floor (allows slight slowdown while staying in-distribution)
-                    self._walk_vx = max(self._walk_vx - 0.1, 0.1)
+                    self._walk_vx = max(self._walk_vx - 0.1, 0.0)  # Allow full stop
                     if isinstance(self.policy, PPOPolicyStage2):
                         self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
-                    print(f"[ĐI BỘ] Lệnh: vx={self._walk_vx:.1f}m/s (min=0.1 để tránh OOD)")
+                    print(f"[ĐI BỘ] vx={self._walk_vx:.1f} m/s ({self._walk_vx*3.6:.1f} km/h) | vy={self._walk_vy:.1f} m/s | yaw={self._walk_yaw:.2f} rad/s")
                 else:
                     self.inject_perturbation(fx=-150.0)
 
@@ -1411,9 +1467,23 @@ class BlenderMuJoCoViewer:
             elif key == glfw.KEY_RIGHT:
                 self.inject_perturbation(fy=-140.0)
             elif key == glfw.KEY_UP:
-                self.inject_perturbation(fx=150.0)
+                if self._stage2_loaded and self.control_mode == 'PPO':
+                    # Fast speed increase: +0.2 m/s
+                    self._walk_vx = min(self._walk_vx + 0.2, 1.2)
+                    if isinstance(self.policy, PPOPolicyStage2):
+                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f'[TỐC ĐỘ] Vx={self._walk_vx:.1f} m/s ({self._walk_vx*3.6:.1f} km/h)')
+                else:
+                    self.inject_perturbation(fx=150.0)
             elif key == glfw.KEY_DOWN:
-                self.inject_perturbation(fx=-150.0)
+                if self._stage2_loaded and self.control_mode == 'PPO':
+                    # Fast speed decrease: -0.2 m/s
+                    self._walk_vx = max(self._walk_vx - 0.2, 0.0)
+                    if isinstance(self.policy, PPOPolicyStage2):
+                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f'[TỐC ĐỘ] Vx={self._walk_vx:.1f} m/s ({self._walk_vx*3.6:.1f} km/h)')
+                else:
+                    self.inject_perturbation(fx=-150.0)
             elif key == glfw.KEY_F:
                 self.inject_perturbation(fx=120.0, fy=100.0)
 
@@ -1543,7 +1613,12 @@ class BlenderMuJoCoViewer:
         elif self.control_mode == "PPO" and self._stage2_loaded:
             # Stage 2: hiển thị tốc độ lệnh và tốc độ thực của CoM
             vx_actual = float(self.data.qvel[0])
-            badge_text = f"DI BO AI | Lenh:{self._walk_vx:+.1f}m/s | Thuc:{vx_actual:+.1f}m/s"
+            cmd_kmh = self._walk_vx * 3.6
+            act_kmh = vx_actual * 3.6
+            if self._walk_vx == 0.0:
+                badge_text = f"AI CAM BANG | Dung yen | Thuc:{act_kmh:+.1f}km/h"
+            else:
+                badge_text = f"DI BO AI | Lenh:{cmd_kmh:+.1f}km/h | Thuc:{act_kmh:+.1f}km/h"
             badge_color = (0, 255, 200, 255)
         elif self.control_mode == "PPO":
             badge_text = "NAO AI PPO (STAGE 1 - CAN BANG)"
@@ -1693,9 +1768,10 @@ class BlenderMuJoCoViewer:
                 ("W/S",     "Tiến/Lùi"),
                 ("A/D",     "Trái/Phải"),
                 ("Q/E",     "Xoay T/P"),
-                ("X",       "Dừng Robot"),
-                ("MŨI TÊN", "Đẩy Xô"),
-                ("K",       f"Ragdoll:{'BẬT' if self.control_mode == 'RAGDOLL' else 'TẮT'}"),
+                ("X",       "Dừng"),
+                ("UP/DN",   "Tốc độ"),
+                ("L/R",     "Đẩy Xô"),
+                ("B",       f"Ragdoll:{'BẬT' if self.control_mode == 'RAGDOLL' else 'TẮT'}"),
                 ("R",       "Đặt Lại"),
                 ("TAB",     "Ẩn HUD"),
                 ("ESC",     "Thoát"),
@@ -1704,8 +1780,7 @@ class BlenderMuJoCoViewer:
             mode_tag = "NÃO AI" if self.control_mode == "PPO" else ("PD CỨNG" if self.control_mode == "PD" else "SẬP NGUỒN")
             shortcuts = [
                 ("SPACE",     "Chạy/Dừng"),
-                ("B",         f"Điều khiển:{mode_tag}"),
-                ("K",         f"Ragdoll:{'BẬT' if self.control_mode == 'RAGDOLL' else 'TẮT'}"),
+                ("B",         f"Ragdoll:{'BẬT' if self.control_mode == 'RAGDOLL' else 'TẮT'}"),
                 ("MŨI TÊN/F", "Thử Đẩy Xô"),
                 ("R",         "Đặt Lại"),
                 ("TAB",       "Ẩn/Hiện HUD"),
@@ -1793,18 +1868,20 @@ class BlenderMuJoCoViewer:
                 self.frame_count += 1
                 if now - self.last_fps_time >= 0.5:
                     self.render_fps = self.frame_count / (now - self.last_fps_time)
-                    self.physics_fps = 200.0 * self.sim_speed if not self.paused else 0.0
+                    self.physics_fps = 100.0 * self.sim_speed if not self.paused else 0.0
                     self.frame_count = 0
                     self.last_fps_time = now
 
                 self._update_camera_animation()
 
+                # CTRL_DT = N_SUBSTEPS × SIM_DT = 5 × 0.002 = 0.01s (100Hz policy)
+                ctrl_dt = self.SIM_DT * self.N_SUBSTEPS
                 if not self.paused:
                     sim_accumulator += frame_dt * self.sim_speed
                     steps_taken = 0
-                    while sim_accumulator >= self.model.opt.timestep and steps_taken < 10:
+                    while sim_accumulator >= ctrl_dt and steps_taken < 10:
                         self._step_physics_with_balance()
-                        sim_accumulator -= self.model.opt.timestep
+                        sim_accumulator -= ctrl_dt
                         steps_taken += 1
                 elif self.step_single_frame:
                     self._step_physics_with_balance()
