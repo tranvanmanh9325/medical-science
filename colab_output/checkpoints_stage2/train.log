@@ -351,3 +351,36 @@ Steps/iter=98,304 | N_iters=3051 | ROLLOUT=24
 [1500/3051] steps=147,554,304 | rew=0.05311 | loss=0.3610 | sps=556 | vx_max=0.69 | ent=0.0010 | log_std=-2.018 | t=177s *** WALKING WELL ***
 -> checkpoint: /content/checkpoints/apollo_stage2_v8_step_147554304.npz (891KB)
 -> GitHub REST API push OK (step=147554304)
+[1510/3051] steps=148,537,344 | rew=0.04740 | loss=0.1785 | sps=8,258 | vx_max=0.70 | ent=0.0010 | log_std=-2.011 | t=449s *** WALKING WELL ***
+[1520/3051] steps=149,520,384 | rew=0.04472 | loss=0.1105 | sps=8,293 | vx_max=0.70 | ent=0.0010 | log_std=-2.006 | t=567s *** WALKING WELL ***
+[1530/3051] steps=150,503,424 | rew=0.04553 | loss=0.1418 | sps=8,291 | vx_max=0.70 | ent=0.0010 | log_std=-2.002 | t=686s *** WALKING WELL ***
+[1540/3051] steps=151,486,464 | rew=0.04342 | loss=0.1037 | sps=8,268 | vx_max=0.70 | ent=0.0010 | log_std=-1.999 | t=805s *** WALKING WELL ***
+[1550/3051] steps=152,469,504 | rew=0.04571 | loss=0.0867 | sps=8,260 | vx_max=0.71 | ent=0.0010 | log_std=-1.996 | t=924s *** WALKING WELL ***
+[1560/3051] steps=153,452,544 | rew=0.04357 | loss=0.1021 | sps=8,258 | vx_max=0.71 | ent=0.0010 | log_std=-1.992 | t=1043s *** WALKING WELL ***
+[1570/3051] steps=154,435,584 | rew=0.04110 | loss=0.1054 | sps=8,284 | vx_max=0.71 | ent=0.0010 | log_std=-1.989 | t=1162s *** WALKING WELL ***
+[1580/3051] steps=155,418,624 | rew=0.04126 | loss=0.0970 | sps=8,244 | vx_max=0.72 | ent=0.0010 | log_std=-1.985 | t=1281s *** WALKING WELL ***
+[1590/3051] steps=156,401,664 | rew=0.05046 | loss=0.1106 | sps=8,257 | vx_max=0.72 | ent=0.0010 | log_std=-1.979 | t=1400s *** WALKING WELL ***
+[1600/3051] steps=157,384,704 | rew=0.04236 | loss=0.1226 | sps=8,250 | vx_max=0.72 | ent=0.0010 | log_std=-1.975 | t=1519s *** WALKING WELL ***
+[1610/3051] steps=158,367,744 | rew=0.04700 | loss=0.0790 | sps=8,253 | vx_max=0.73 | ent=0.0010 | log_std=-1.972 | t=1638s *** WALKING WELL ***
+[1620/3051] steps=159,350,784 | rew=0.04789 | loss=0.1123 | sps=8,265 | vx_max=0.73 | ent=0.0010 | log_std=-1.969 | t=1757s *** WALKING WELL ***
+[1630/3051] steps=160,333,824 | rew=0.04638 | loss=0.1374 | sps=8,262 | vx_max=0.73 | ent=0.0010 | log_std=-1.966 | t=1876s *** WALKING WELL ***
+[1640/3051] steps=161,316,864 | rew=0.04894 | loss=0.0962 | sps=8,230 | vx_max=0.73 | ent=0.0010 | log_std=-1.964 | t=1995s *** WALKING WELL ***
+[1650/3051] steps=162,299,904 | rew=0.04445 | loss=0.1130 | sps=8,269 | vx_max=0.74 | ent=0.0010 | log_std=-1.961 | t=2114s *** WALKING WELL ***
+[1660/3051] steps=163,282,944 | rew=0.05140 | loss=0.1716 | sps=8,233 | vx_max=0.74 | ent=0.0010 | log_std=-1.958 | t=2234s *** WALKING WELL ***
+[1670/3051] steps=164,265,984 | rew=0.04913 | loss=0.1765 | sps=8,264 | vx_max=0.74 | ent=0.0010 | log_std=-1.957 | t=2353s *** WALKING WELL ***
+[1680/3051] steps=165,249,024 | rew=0.04660 | loss=0.1704 | sps=8,250 | vx_max=0.75 | ent=0.0010 | log_std=-1.955 | t=2472s *** WALKING WELL ***
+[1690/3051] steps=166,232,064 | rew=0.04512 | loss=0.1344 | sps=8,248 | vx_max=0.75 | ent=0.0010 | log_std=-1.953 | t=2591s *** WALKING WELL ***
+[1700/3051] steps=167,215,104 | rew=0.04971 | loss=0.1320 | sps=8,246 | vx_max=0.75 | ent=0.0010 | log_std=-1.951 | t=2710s *** WALKING WELL ***
+[1710/3051] steps=168,198,144 | rew=0.04556 | loss=0.2303 | sps=8,251 | vx_max=0.75 | ent=0.0010 | log_std=-1.948 | t=2829s *** WALKING WELL ***
+[1720/3051] steps=169,181,184 | rew=0.05237 | loss=0.1399 | sps=8,234 | vx_max=0.76 | ent=0.0010 | log_std=-1.945 | t=2948s *** WALKING WELL ***
+[1730/3051] steps=170,164,224 | rew=0.05311 | loss=0.1415 | sps=8,229 | vx_max=0.76 | ent=0.0010 | log_std=-1.943 | t=3068s *** WALKING WELL ***
+[1740/3051] steps=171,147,264 | rew=0.04841 | loss=0.1480 | sps=8,229 | vx_max=0.76 | ent=0.0010 | log_std=-1.941 | t=3187s *** WALKING WELL ***
+[1750/3051] steps=172,130,304 | rew=0.04646 | loss=0.1258 | sps=8,245 | vx_max=0.77 | ent=0.0010 | log_std=-1.940 | t=3307s *** WALKING WELL ***
+[1760/3051] steps=173,113,344 | rew=0.04957 | loss=0.1321 | sps=8,273 | vx_max=0.77 | ent=0.0010 | log_std=-1.938 | t=3426s *** WALKING WELL ***
+[1770/3051] steps=174,096,384 | rew=0.03979 | loss=0.1580 | sps=8,256 | vx_max=0.77 | ent=0.0010 | log_std=-1.937 | t=3545s *** WALKING ***
+[1780/3051] steps=175,079,424 | rew=0.03697 | loss=0.1347 | sps=8,223 | vx_max=0.78 | ent=0.0010 | log_std=-1.935 | t=3664s *** WALKING ***
+[1790/3051] steps=176,062,464 | rew=0.04033 | loss=0.1213 | sps=8,248 | vx_max=0.78 | ent=0.0010 | log_std=-1.932 | t=3784s *** WALKING WELL ***
+[1800/3051] steps=177,045,504 | rew=0.04105 | loss=0.1554 | sps=8,269 | vx_max=0.78 | ent=0.0010 | log_std=-1.931 | t=3903s *** WALKING WELL ***
+-> checkpoint: /content/checkpoints/apollo_stage2_v8_step_177045504.npz (891KB)
+-> GitHub REST API push OK (step=177045504)
+[1810/3051] steps=178,028,544 | rew=0.04352 | loss=0.1740 | sps=8,228 | vx_max=0.78 | ent=0.0010 | log_std=-1.930 | t=4028s *** WALKING WELL ***
