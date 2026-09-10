@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from mcp.server import MCPServer
-from mcp.server.stdio import stdio_server
+
 
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -558,12 +558,9 @@ async def project_info() -> str:
     )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN
+# MAIN — mcp 2.0.0: dùng mcp.run('stdio') hoặc await mcp.run_stdio_async()
 # ══════════════════════════════════════════════════════════════════════════════
-async def _amain():
-    IPC_DIR.mkdir(parents=True, exist_ok=True)
-    async with stdio_server() as (rd, wr):
-        await mcp.run(rd, wr, mcp.create_initialization_options())
-
 if __name__ == "__main__":
-    asyncio.run(_amain())
+    IPC_DIR.mkdir(parents=True, exist_ok=True)
+    # mcp 2.0.0 API: MCPServer.run(transport) là synchronous wrapper dùng anyio.run()
+    mcp.run("stdio")
