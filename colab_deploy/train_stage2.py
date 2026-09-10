@@ -1,9 +1,15 @@
+import sys, argparse
 import os, time, math, glob
 import jax, jax.numpy as jnp
 import optax, flax, flax.linen as nn
 import mujoco, flax.traverse_util
 from mujoco import mjx
 import numpy as np
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--resume", type=str, default="", help="Path to checkpoint .npz file to resume from")
+args = parser.parse_args()
+
 
 print("=" * 64)
 print("  APOLLO HUMANOID - STAGE 2: WALKING (v8)")
@@ -285,6 +291,20 @@ tx          = optax.chain(optax.clip_by_global_norm(MAX_GRAD),
                           optax.adam(lr_schedule, eps=1e-5))
 opt_state   = tx.init(params)
 
+start_it = 1
+cur = 0
+
+if args.resume and os.path.exists(args.resume):
+    print(f"[RESUME] Loading checkpoint from {args.resume}...", flush=True)
+    ck_data = np.load(args.resume)
+    flat_params = {k: jnp.array(ck_data[k]) for k in ck_data.files if k not in ["_step", "_it"]}
+    params = flax.traverse_util.unflatten_dict(flat_params, sep="/")
+    if "_step" in ck_data:
+        cur = int(ck_data["_step"])
+    if "_it" in ck_data:
+        start_it = int(ck_data["_it"])
+    print(f"[RESUME] Restored step={cur}, it={start_it}", flush=True)
+
 rng_envs = jax.random.split(rng, NUM_ENVS)
 states   = jax.vmap(env_reset)(rng_envs)
 
@@ -363,7 +383,7 @@ def ppo_minibatch_update(params, opt_state, fo_mb, fa_mb, flp_mb, fadv_mb, fret_
 # 8. TRAINING LOOP
 # ================================================================
 os.makedirs(CKPT_DIR, exist_ok=True)
-t0, cur = time.time(), 0
+t0 = time.time()
 
 WALK_THRESHOLD      = 0.020
 WALK_WELL_THRESHOLD = 0.040
@@ -394,7 +414,7 @@ def reseed_cmd_vel(states, rng, vx_max, vy_max, yaw_max):
 
 import numpy as np_host
 
-for it in range(1, N_ITERS + 1):
+for it in range(start_it, N_ITERS + 1):
     t1 = time.time()
 
     # Adaptive parameters (host-side, outside jit) — update module-level vars

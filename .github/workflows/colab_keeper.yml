@@ -12,9 +12,10 @@ on:
 jobs:
   keep-alive:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 350
     permissions:
       contents: write
+      actions: write
     env:
       TZ: 'Asia/Ho_Chi_Minh'
 
@@ -68,3 +69,15 @@ jobs:
           git config --global user.name "Apollo Cloud Relay"
           git config --global user.email "relay@medical-science.local"
           python -u training/colab_relay.py
+
+      - name: Re-trigger workflow for continuous training
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Re-trigger this workflow to continue training after 6h limit
+          # Only re-trigger if training is not marked as complete
+          if [ ! -f /tmp/training_complete ]; then
+            echo "Re-triggering Colab Cloud Keeper for continued training..."
+            gh workflow run "Colab Cloud Keeper" --repo ${{ github.repository }}
+          fi
