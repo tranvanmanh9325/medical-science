@@ -431,6 +431,115 @@ class PPOPolicyStage2V8(PPOPolicyStage2):
 
 
 # ==============================================================================
+# 0d. PPO POLICY STAGE 2 v9 — NATURAL STAND & LOCOMOTION (112-DIM BASE FRAME)
+# ==============================================================================
+class PPOPolicyStage2V9(PPOPolicy):
+    """
+    Chính sách AI Stage 2 v9: Tự Đứng Thăng Bằng & Đi Bộ Tự Nhiên (Chuẩn DeepMind / ETH).
+    Không gian quan sát 112 chiều hoàn toàn trong Hệ quy chiếu Thân Robot (Local Base Frame):
+      1. projected_gravity (3 chiều): [0, 0, -1] quay về tọa độ thân.
+      2. base_lin_vel (3 chiều): vận tốc tịnh tiến thân trong tọa độ thân.
+      3. base_ang_vel (3 chiều): vận tốc góc thân trong tọa độ thân.
+      4. joint_pos - default_pose (32 chiều): góc lệch khớp so với tư thế chuẩn.
+      5. joint_vel (32 chiều): vận tốc góc khớp.
+      6. prev_act (32 chiều): hành động mạng nơ-ron bước trước.
+      7. cmd_vel (3 chiều): lệnh vận tốc điều khiển [vx, vy, yaw_rate].
+      8. gait_phase (4 chiều): tín hiệu nhịp bước CPG [sin_L, cos_L, sin_R, cos_R].
+    (Tổng: 3 + 3 + 3 + 32 + 32 + 32 + 3 + 4 = 112 chiều).
+
+    Đặc điểm cốt lõi:
+      - Khi cmd_vel == 0 km/h: Mạng nơ-ron tự động cân bằng đứng thẳng tự nhiên (Stand-Still Balance)
+        mà KHÔNG cần bất kỳ lực kéo nhân tạo hay mã can thiệp ngoại lệ nào.
+      - Khi cmd_vel > 0 km/h: Mạng nơ-ron điều phối nhịp bước chân luân phiên (Alternating Bipedal Gait).
+      - Đầu ra tuyến tính (Linear Actor), action scale = 0.15 rad.
+    """
+    OBS_DIM_S2 = 112
+    STEP_FREQ  = 1.2
+    CTRL_DT    = 0.01
+
+    def __init__(self, checkpoint_path: str, mj_model, nu: int):
+        super().__init__(checkpoint_path, mj_model, nu)
+        self.action_scale = 0.15
+        self.cmd_vel = np.zeros(3, dtype=np.float32)  # [vx m/s, vy m/s, yaw rad/s]
+        self.phase   = 0.0
+
+        print(f"[PPO STAGE 2 v9] ĐÃ NẠP MÔ HÌNH V9 (112 chiều - Tọa độ thân cục bộ): {os.path.basename(checkpoint_path)}")
+        print(f"  Linear Actor | Action Scale: {self.action_scale} | Tần số bước: {self.STEP_FREQ}Hz")
+        print(f"  Tự đứng cân bằng khi 0 km/h | Điều khiển bằng km/h qua phím W/S, [ / ], X")
+
+    @staticmethod
+    def _quat_rotate_inverse(q, v):
+        """Quay véc-tơ v bằng quaternion nghịch đảo (MuJoCo format [w, x, y, z])."""
+        q_w = q[0]
+        q_vec = -q[1:4]
+        a = v * (2.0 * q_w**2 - 1.0)
+        b = np.cross(q_vec, v) * q_w * 2.0
+        c = q_vec * np.dot(q_vec, v) * 2.0
+        return a + b + c
+
+    def get_obs(self, data, mj_model) -> np.ndarray:
+        qpos = data.qpos
+        qvel = data.qvel
+        base_quat = qpos[3:7]
+
+        proj_grav    = self._quat_rotate_inverse(base_quat, np.array([0.0, 0.0, -1.0]))
+        base_lin_vel = self._quat_rotate_inverse(base_quat, qvel[:3])
+        base_ang_vel = self._quat_rotate_inverse(base_quat, qvel[3:6])
+
+        phi_l = 2.0 * math.pi * self.phase
+        phi_r = 2.0 * math.pi * ((self.phase + 0.5) % 1.0)
+        gait_phase = np.array([math.sin(phi_l), math.cos(phi_l), math.sin(phi_r), math.cos(phi_r)], dtype=np.float32)
+
+        jpos = qpos[7:7+self.nu] - self.default_pose
+        jvel = qvel[6:6+self.nu]
+
+        obs = np.concatenate([
+            proj_grav,
+            base_lin_vel,
+            base_ang_vel,
+            jpos,
+            jvel,
+            self.prev_act,
+            self.cmd_vel,
+            gait_phase
+        ])
+        return np.clip(obs, -20.0, 20.0)
+
+    def infer(self, obs: np.ndarray) -> np.ndarray:
+        x = obs.astype(np.float32)
+        for W, b in zip(self.W, self.b):
+            x = self._elu(x @ W + b)
+        mean = x @ self.W_mean + self.b_mean
+        return np.clip(mean, -1.0, 1.0)
+
+    def step(self, data, mj_model) -> np.ndarray:
+        # Nhịp đồng hồ bước chỉ chạy khi có lệnh di chuyển
+        cmd_speed = float(np.linalg.norm(self.cmd_vel[:2]))
+        if cmd_speed >= 0.05:
+            self.phase = (self.phase + self.CTRL_DT * self.STEP_FREQ) % 1.0
+        else:
+            self.phase = 0.0
+
+        obs = self.get_obs(data, mj_model)
+        action = self.infer(obs)
+
+        # Điều khiển trực tiếp qua mạng PPO thuần túy (Không bù trừ thủ công)
+        ctrl = self.default_pose + action * self.action_scale
+        ctrl = np.clip(ctrl, self.ctrl_range[:, 0], self.ctrl_range[:, 1])
+
+        self.prev_act = action.copy()
+        return ctrl
+
+    def set_cmd_vel(self, vx: float = 0.0, vy: float = 0.0, yaw: float = 0.0):
+        self.cmd_vel[:] = np.clip([vx, vy, yaw], [-1.2, -0.3, -0.5], [1.2, 0.3, 0.5])
+
+    def reset(self):
+        super().reset()
+        self.phase = 0.0
+        self.cmd_vel = np.zeros(3, dtype=np.float32)
+
+
+# ==============================================================================
 # 1. SMOOTH GET-UP CONTROLLER — ĐỨNG DẬY VẬT LÝ MỀM (KHÔNG CÓ TELEPORT)
 # ==============================================================================
 class SmoothGetUpController:
@@ -1066,44 +1175,50 @@ class BlenderMuJoCoViewer:
         if ck_files:
             best_ck = ck_files[-1]
             try:
-                # Auto-detect Stage 2 vs Stage 1 từ obs_dim của input layer
+                # Auto-detect Stage 2 (v9 / v8) vs Stage 1 từ obs_dim của input layer
                 probe = np.load(best_ck)
                 probe_keys = list(probe.keys())
                 w0_key = next((k for k in probe_keys if "Dense_0" in k and "kernel" in k), None)
-                is_stage2 = (w0_key is not None and probe[w0_key].shape[0] == PPOPolicyStage2.OBS_DIM_S2)
-                # Detect v8 checkpoint by filename (linear actor — no tanh)
-                is_v8 = "v8" in os.path.basename(best_ck)
+                obs_dim = probe[w0_key].shape[0] if w0_key is not None else 0
 
-                if is_stage2:
-                    if is_v8:
-                        self.policy = PPOPolicyStage2V8(best_ck, self.model, self.model.nu)
-                        print(f"[PPO STAGE 2 v8] LINEAR ACTOR — 300M steps đã nạp!")
-                        print(f"  File: {os.path.basename(best_ck)}")
-                        print(f"  Phím W/S: Tiến/Lùi (vx_max=1.2 m/s) | A/D: Sang trái/phải | Q/E: Xoay | X: Dừng")
-                    else:
-                        self.policy = PPOPolicyStage2(best_ck, self.model, self.model.nu)
-                        print(f"[PPO STAGE 2] Checkpoint đi bộ đã nạp thành công!")
-                        print(f"  Phím W/S: Tiến/Lùi | A/D: Sang trái/phải | Q/E: Xoay trái/phải | X: Dừng")
+                is_v9 = (obs_dim == PPOPolicyStage2V9.OBS_DIM_S2 or "v9" in os.path.basename(best_ck))
+                is_v8 = ("v8" in os.path.basename(best_ck))
+                is_stage2 = (obs_dim in (PPOPolicyStage2V9.OBS_DIM_S2, PPOPolicyStage2.OBS_DIM_S2) or "stage2" in os.path.basename(best_ck))
+
+                if is_v9:
+                    self.policy = PPOPolicyStage2V9(best_ck, self.model, self.model.nu)
+                    print(f"[PPO STAGE 2 v9] 112-DIM BASE FRAME MODEL ĐÃ NẠP!")
+                    print(f"  File: {os.path.basename(best_ck)}")
+                    print(f"  Tự đứng cân bằng khi 0.0 km/h | Phím W/S & [ / ]: Chỉnh tốc độ (km/h) | X: Dừng")
                     stage2_loaded = True
-                    # Default vx=0.0 để policy khởi đầu in-distribution (tránh ngã ngay)
-                    self.policy.set_cmd_vel(vx=0.0, vy=0.0, yaw=0.0)  # Standing mode by default
-                    print(f"  [DEFAULT CMD] vx=0.0 m/s | Nhấn W để tăng, S để giảm, X để dừng")
+                elif is_stage2 and is_v8:
+                    self.policy = PPOPolicyStage2V8(best_ck, self.model, self.model.nu)
+                    print(f"[PPO STAGE 2 v8] LINEAR ACTOR — 300M steps đã nạp!")
+                    print(f"  File: {os.path.basename(best_ck)}")
+                    stage2_loaded = True
+                elif is_stage2:
+                    self.policy = PPOPolicyStage2(best_ck, self.model, self.model.nu)
+                    print(f"[PPO STAGE 2] Checkpoint đi bộ đã nạp thành công!")
+                    stage2_loaded = True
                 else:
                     self.policy = PPOPolicy(best_ck, self.model, self.model.nu)
                     print(f"[PPO STAGE 1] Brain AI cân bằng đã nạp! Phím B: Não AI/PD")
+
+                if stage2_loaded:
+                    self.policy.set_cmd_vel(vx=0.0, vy=0.0, yaw=0.0)
+                    print(f"  [TRẠNG THÁI KHỞI ĐỘNG] Vận tốc: 0.0 km/h — Robot tự động đứng thăng bằng tự nhiên")
                 self.control_mode = "PPO"
             except Exception as e:
                 print(f"[PPO] Lỗi nạp checkpoint: {e}")
                 print("[PPO] Dùng PD controller dự phòng.")
         else:
-            print(f"[PPO] Không tìm thấy checkpoint!")
-            print("[PPO] Chạy: python training/download_checkpoints.py")
+            print(f"[PPO] Không tìm thấy checkpoint! Sử dụng chế độ đứng cân bằng tiêu chuẩn.")
 
-        # Lệnh vận tốc từ người dùng (WASD) — chỉ dùng khi policy là Stage 2
-        # FIX: default vx=0.0 (in-distribution) khi Stage 2 loaded, tránh OOD fall
-        self._walk_vx  = 0.0  # Start standing still — user presses W to walk
-        self._walk_vy  = 0.0
-        self._walk_yaw = 0.0
+        # Lệnh vận tốc điều khiển đi bộ — đo lường chuẩn km/h
+        self._walk_vx_kmh   = 0.0  # km/h (Mặc định 0.0 km/h: tự đứng cân bằng)
+        self._walk_vx       = 0.0  # m/s quy đổi nội bộ
+        self._walk_vy       = 0.0  # m/s ngang
+        self._walk_yaw      = 0.0  # rad/s xoay thân
         self._stage2_loaded = stage2_loaded
 
         # --- Khởi tạo Bộ Đứng Dậy Mượt Mà (Physics-Safe Soft Recovery) ---
@@ -1508,67 +1623,76 @@ class BlenderMuJoCoViewer:
             elif key == glfw.KEY_4 and not mods:
                 self.sim_speed = 1.0
 
-            # ── WASD: Điều khiển lệnh vận tốc đi bộ (Stage 2) ──────────────
-            # Stage 1: Mũi tên = lực đẩy thử nghiệm | Stage 2: WASD = velocity command
+            # ── ĐIỀU KHIỂN VẬN TỐC ROBOT (CHUẨN ĐO LƯỜNG KM/H) ────────────
             elif key == glfw.KEY_W:
                 if self._stage2_loaded and self.control_mode == "PPO":
-                    self._walk_vx = min(self._walk_vx + 0.1, 1.2)  # v8 trained to 1.2 m/s
-                    if isinstance(self.policy, PPOPolicyStage2):
-                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
-                    print(f"[ĐI BỘ] vx={self._walk_vx:.1f} m/s ({self._walk_vx*3.6:.1f} km/h) | vy={self._walk_vy:.1f} m/s | yaw={self._walk_yaw:.2f} rad/s")
+                    self._walk_vx_kmh = min(self._walk_vx_kmh + 0.5, 4.5)
+                    self._walk_vx = self._walk_vx_kmh / 3.6
+                    self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f"[VẬN TỐC LỆNH] Tiến: {self._walk_vx_kmh:.1f} km/h ({self._walk_vx:.2f} m/s) | Ngang: {self._walk_vy*3.6:+.1f} km/h")
                 else:
                     self.inject_perturbation(fx=150.0)
 
             elif key == glfw.KEY_S:
                 if self._stage2_loaded and self.control_mode == "PPO":
-                    # FIX: clamp vx to 0.1 minimum — policy not trained below 0 (OOD → falls)
-                    # Use 0.1 as floor (allows slight slowdown while staying in-distribution)
-                    self._walk_vx = max(self._walk_vx - 0.1, 0.0)  # Allow full stop
-                    if isinstance(self.policy, PPOPolicyStage2):
-                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
-                    print(f"[ĐI BỘ] vx={self._walk_vx:.1f} m/s ({self._walk_vx*3.6:.1f} km/h) | vy={self._walk_vy:.1f} m/s | yaw={self._walk_yaw:.2f} rad/s")
+                    self._walk_vx_kmh = max(self._walk_vx_kmh - 0.5, -2.0)
+                    self._walk_vx = self._walk_vx_kmh / 3.6
+                    self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f"[VẬN TỐC LỆNH] Tiến/Lùi: {self._walk_vx_kmh:.1f} km/h ({self._walk_vx:.2f} m/s) | Ngang: {self._walk_vy*3.6:+.1f} km/h")
                 else:
                     self.inject_perturbation(fx=-150.0)
+
+            # Phím [ / ] hoặc +/-: Điều chỉnh tốc độ nhanh theo từng nấc 1.0 km/h
+            elif key in (glfw.KEY_RIGHT_BRACKET, glfw.KEY_EQUAL, glfw.KEY_KP_ADD):
+                if self._stage2_loaded and self.control_mode == "PPO":
+                    self._walk_vx_kmh = min(self._walk_vx_kmh + 1.0, 4.5)
+                    self._walk_vx = self._walk_vx_kmh / 3.6
+                    self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f"[TĂNG TỐC NHANH] Vận tốc: {self._walk_vx_kmh:.1f} km/h ({self._walk_vx:.2f} m/s)")
+
+            elif key in (glfw.KEY_LEFT_BRACKET, glfw.KEY_MINUS, glfw.KEY_KP_SUBTRACT):
+                if self._stage2_loaded and self.control_mode == "PPO":
+                    self._walk_vx_kmh = max(self._walk_vx_kmh - 1.0, -2.0)
+                    self._walk_vx = self._walk_vx_kmh / 3.6
+                    self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f"[GIẢM TỐC NHANH] Vận tốc: {self._walk_vx_kmh:.1f} km/h ({self._walk_vx:.2f} m/s)")
 
             elif key == glfw.KEY_A:
                 if self._stage2_loaded and self.control_mode == "PPO":
                     self._walk_vy = max(self._walk_vy - 0.05, -0.3)
-                    if isinstance(self.policy, PPOPolicyStage2):
-                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
-                    print(f"[ĐI BỘ] Lệnh: vy={self._walk_vy:.2f}m/s")
+                    self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f"[ĐI BỘ] Vận tốc ngang: {self._walk_vy*3.6:+.1f} km/h ({self._walk_vy:+.2f} m/s)")
                 else:
                     self.inject_perturbation(fy=140.0)
 
             elif key == glfw.KEY_D:
                 if self._stage2_loaded and self.control_mode == "PPO":
                     self._walk_vy = min(self._walk_vy + 0.05, 0.3)
-                    if isinstance(self.policy, PPOPolicyStage2):
-                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
-                    print(f"[ĐI BỘ] Lệnh: vy={self._walk_vy:.2f}m/s")
+                    self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f"[ĐI BỘ] Vận tốc ngang: {self._walk_vy*3.6:+.1f} km/h ({self._walk_vy:+.2f} m/s)")
                 else:
                     self.inject_perturbation(fy=-140.0)
 
             elif key == glfw.KEY_Q:
                 if self._stage2_loaded and self.control_mode == "PPO":
                     self._walk_yaw = min(self._walk_yaw + 0.1, 0.5)
-                    if isinstance(self.policy, PPOPolicyStage2):
-                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
-                    print(f"[ĐI BỘ] Lệnh: yaw={self._walk_yaw:.2f}rad/s (xoay trái)")
+                    self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f"[ĐI BỘ] Vận tốc xoay: {self._walk_yaw:+.2f} rad/s (quay trái)")
 
             elif key == glfw.KEY_E:
                 if self._stage2_loaded and self.control_mode == "PPO":
                     self._walk_yaw = max(self._walk_yaw - 0.1, -0.5)
-                    if isinstance(self.policy, PPOPolicyStage2):
-                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
-                    print(f"[ĐI BỘ] Lệnh: yaw={self._walk_yaw:.2f}rad/s (xoay phải)")
+                    self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f"[ĐI BỘ] Vận tốc xoay: {self._walk_yaw:+.2f} rad/s (quay phải)")
 
             elif key == glfw.KEY_X:
-                # Dừng ngay: reset tất cả velocity command về 0
+                # Dừng ngay lập tức: đưa vận tốc về 0.0 km/h để robot tự đứng cân bằng
                 if self._stage2_loaded:
+                    self._walk_vx_kmh = 0.0
                     self._walk_vx = self._walk_vy = self._walk_yaw = 0.0
-                    if isinstance(self.policy, PPOPolicyStage2):
+                    if self.policy is not None:
                         self.policy.set_cmd_vel(0.0, 0.0, 0.0)
-                    print("[ĐI BỘ] Dừng! Lệnh vận tốc về 0.")
+                    print("[ĐI BỘ] ĐÃ DỪNG! Lệnh vận tốc: 0.0 km/h — Robot tự động đứng thăng bằng tự nhiên.")
 
             # Lực đẩy xô thử nghiệm — Arrow keys cho Stage 1, F cho cả 2
             elif key == glfw.KEY_LEFT:
@@ -1577,20 +1701,18 @@ class BlenderMuJoCoViewer:
                 self.inject_perturbation(fy=-140.0)
             elif key == glfw.KEY_UP:
                 if self._stage2_loaded and self.control_mode == 'PPO':
-                    # Fast speed increase: +0.2 m/s
-                    self._walk_vx = min(self._walk_vx + 0.2, 1.2)
-                    if isinstance(self.policy, PPOPolicyStage2):
-                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
-                    print(f'[TỐC ĐỘ] Vx={self._walk_vx:.1f} m/s ({self._walk_vx*3.6:.1f} km/h)')
+                    self._walk_vx_kmh = min(self._walk_vx_kmh + 0.5, 4.5)
+                    self._walk_vx = self._walk_vx_kmh / 3.6
+                    self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f'[TỐC ĐỘ] Vận tốc: {self._walk_vx_kmh:.1f} km/h ({self._walk_vx:.2f} m/s)')
                 else:
                     self.inject_perturbation(fx=150.0)
             elif key == glfw.KEY_DOWN:
                 if self._stage2_loaded and self.control_mode == 'PPO':
-                    # Fast speed decrease: -0.2 m/s
-                    self._walk_vx = max(self._walk_vx - 0.2, 0.0)
-                    if isinstance(self.policy, PPOPolicyStage2):
-                        self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
-                    print(f'[TỐC ĐỘ] Vx={self._walk_vx:.1f} m/s ({self._walk_vx*3.6:.1f} km/h)')
+                    self._walk_vx_kmh = max(self._walk_vx_kmh - 0.5, -2.0)
+                    self._walk_vx = self._walk_vx_kmh / 3.6
+                    self.policy.set_cmd_vel(self._walk_vx, self._walk_vy, self._walk_yaw)
+                    print(f'[TỐC ĐỘ] Vận tốc: {self._walk_vx_kmh:.1f} km/h ({self._walk_vx:.2f} m/s)')
                 else:
                     self.inject_perturbation(fx=-150.0)
             elif key == glfw.KEY_F:
@@ -1870,16 +1992,13 @@ class BlenderMuJoCoViewer:
         gl.glEnd()
 
         if self._stage2_loaded and self.control_mode == "PPO":
-            # Stage 2: Hiển thị lệnh vận tốc WASD hiện tại
-            mode_tag = f"ĐI BỘ AI(Vx:{self._walk_vx:+.1f} Vy:{self._walk_vy:+.2f} Yaw:{self._walk_yaw:+.1f})"
             shortcuts = [
                 ("SPACE",   "Chạy/Dừng"),
-                ("W/S",     "Tiến/Lùi"),
+                ("W/S",     "Tiến/Lùi km/h"),
+                ("[ / ]",   "±1 km/h"),
                 ("A/D",     "Trái/Phải"),
                 ("Q/E",     "Xoay T/P"),
-                ("X",       "Dừng"),
-                ("UP/DN",   "Tốc độ"),
-                ("L/R",     "Đẩy Xô"),
+                ("X",       "Dừng (0 km/h)"),
                 ("B",       f"Ragdoll:{'BẬT' if self.control_mode == 'RAGDOLL' else 'TẮT'}"),
                 ("R",       "Đặt Lại"),
                 ("TAB",     "Ẩn HUD"),

@@ -21,6 +21,9 @@ MUJOCO_LOG.TXT
 kaggle_output/
 kaggle_output_*/
 checkpoints/
+archive/
+mcp-server/ipc/
+pic/
 
 # OS & IDE
 .DS_Store

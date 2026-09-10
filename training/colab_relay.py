@@ -303,7 +303,7 @@ def sync_remote_checkpoint_rest(acc_name, log_content=None):
     Downloads the latest checkpoint and full train.log from Colab via Google HTTP REST API (ContentsClient).
     Bypasses Jupyter kernel and subprocess completely. Fast, robust, and handles binary data.
     If the remote checkpoint is newer than the local one, writes to disk and commits to GitHub.
-    v8 checkpoints are saved at /content/checkpoints/apollo_stage2_v8_latest.npz
+    v9 checkpoints are saved at /content/checkpoints/apollo_stage2_v9_latest.npz
     '''
     try:
         s = state.store.get(SESSION_NAME)
@@ -311,8 +311,8 @@ def sync_remote_checkpoint_rest(acc_name, log_content=None):
             return False
         import base64
         contents = ContentsClient(s)
-        # v8 checkpoint path (written by train_stage2.py every 300 iters)
-        remote_ckpt_path = "content/checkpoints/apollo_stage2_v8_latest.npz"
+        # v9 checkpoint path (written by train_stage2.py every 100 iters)
+        remote_ckpt_path = "content/checkpoints/apollo_stage2_v9_latest.npz"
         try:
             data = contents._request("GET", remote_ckpt_path, params={"content": "1", "format": "base64"})
         except FileNotFoundError:
@@ -333,7 +333,7 @@ def sync_remote_checkpoint_rest(acc_name, log_content=None):
         if len(ckpt_bytes) < 100_000:
             return False
 
-        local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v8_latest.npz")
+        local_target = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v9_latest.npz")
         remote_it, remote_step = parse_npz_step_and_it(ckpt_bytes)
 
         # Check local step
@@ -361,15 +361,15 @@ def sync_remote_checkpoint_rest(acc_name, log_content=None):
             # Update history files
             update_checkpoint_history_files(acc_name, log_content)
 
-            print(f"[{get_vn_time_str()} | {acc_name}] [CHECKPOINT SYNC] Đã tải checkpoint v8 mới từ Colab: Iter {remote_it} (Step {remote_step:,})", flush=True)
+            print(f"[{get_vn_time_str()} | {acc_name}] [CHECKPOINT SYNC] Đã tải checkpoint v9 mới từ Colab: Iter {remote_it} (Step {remote_step:,})", flush=True)
 
             files_to_sync = [
-                "colab_output/checkpoints_stage2/apollo_stage2_v8_latest.npz",
+                "colab_output/checkpoints_stage2/apollo_stage2_v9_latest.npz",
                 "colab_output/checkpoints_stage2/train.log",
                 "colab_output/checkpoints_stage2/checkpoint_history.md",
                 "colab_output/checkpoints_stage2/checkpoint_history.csv"
             ]
-            git_commit_and_push(files_to_sync, f"chore(checkpoint): sync v8 checkpoint [acc: {acc_name} | step: {remote_step:,} | it: {remote_it}/3051]")
+            git_commit_and_push(files_to_sync, f"chore(checkpoint): sync v9 checkpoint [acc: {acc_name} | step: {remote_step:,} | it: {remote_it}]")
             return True
     except Exception as e:
         print(f"[CHECKPOINT SYNC ERROR] {e}", flush=True)
@@ -848,17 +848,16 @@ else:
     subprocess.run(["colab", "upload", "-s", SESSION_NAME, train_script, "/content/train_stage2.py"], capture_output=True)
 
     # 3. Resume Checkpoint Check
-    # v8 NOTE: Architecture changed (linear actor, sigmoid log_std) — incompatible with v2 weights.
-    # Always train from scratch for v8. Do NOT resume from apollo_stage2_v2_latest.npz.
+    # v9: Modern 112-dim Base Frame Obs & Stand-Still Reward
     pull_git_latest()
-    latest_ck_v8 = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v8_latest.npz")
+    latest_ck_v9 = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v9_latest.npz")
     resume_flag = ""
-    if os.path.exists(latest_ck_v8):
-        print(f"[RELAY RESUME] Tìm thấy checkpoint v8: {latest_ck_v8}", flush=True)
-        subprocess.run(["colab", "upload", "-s", SESSION_NAME, latest_ck_v8, "/content/apollo_stage2_v8_latest.npz"], capture_output=True)
-        resume_flag = "--resume /content/apollo_stage2_v8_latest.npz"
+    if os.path.exists(latest_ck_v9):
+        print(f"[RELAY RESUME] Tìm thấy checkpoint v9: {latest_ck_v9}", flush=True)
+        subprocess.run(["colab", "upload", "-s", SESSION_NAME, latest_ck_v9, "/content/apollo_stage2_v9_latest.npz"], capture_output=True)
+        resume_flag = "--resume /content/apollo_stage2_v9_latest.npz"
     else:
-        print(f"[RELAY] Không có checkpoint v8 — bắt đầu train từ đầu (from scratch)", flush=True)
+        print(f"[RELAY] Không có checkpoint v9 — bắt đầu train từ đầu (from scratch)", flush=True)
 
     # 4. Launch training daemon
     gh_token = get_github_token()
@@ -1033,30 +1032,30 @@ def monitor_and_sync(acc_name):
                 except Exception as e:
                     print(f"[RELAY SYNC WARNING] Lỗi đồng bộ checkpoint: {e}", flush=True)
 
-            if "STAGE 2 v8 TRAINING COMPLETE!" in log_content:
+            if "STAGE 2 v9 TRAINING COMPLETE!" in log_content:
                 print("\n" + "=" * 64)
-                print("  🎉🎉🎉 HUẤN LUYỆN V8 HOÀN TẤT 100%! CÁN ĐÍCH 300M BƯỚC! 🎉🎉🎉")
+                print("  🎉🎉🎉 HUẤN LUYỆN V9 HOÀN TẤT 100%! CÁN ĐÍCH 150M BƯỚC! 🎉🎉🎉")
                 print("=" * 64, flush=True)
                 try:
                     s = state.store.get(SESSION_NAME)
                     contents = ContentsClient(s)
-                    data = contents._request("GET", "content/checkpoints/apollo_stage2_v8_final.npz", params={"content": "1", "format": "base64"})
+                    data = contents._request("GET", "content/checkpoints/apollo_stage2_v9_final.npz", params={"content": "1", "format": "base64"})
                     raw_b64 = data.get("content")
                     if raw_b64:
                         import base64
-                        final_local = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v8_final.npz")
+                        final_local = os.path.join(LOCAL_CKPT_DIR, "apollo_stage2_v9_final.npz")
                         with open(final_local, "wb") as f:
                             f.write(base64.b64decode(raw_b64))
 
                     update_checkpoint_history_files(acc_name, log_content, is_final=True)
                     files_to_sync = [
-                        "colab_output/checkpoints_stage2/apollo_stage2_v8_final.npz",
-                        "colab_output/checkpoints_stage2/apollo_stage2_v8_latest.npz",
+                        "colab_output/checkpoints_stage2/apollo_stage2_v9_final.npz",
+                        "colab_output/checkpoints_stage2/apollo_stage2_v9_latest.npz",
                         "colab_output/checkpoints_stage2/train.log",
                         "colab_output/checkpoints_stage2/checkpoint_history.md",
                         "colab_output/checkpoints_stage2/checkpoint_history.csv"
                     ]
-                    git_commit_and_push(files_to_sync, "feat(weights): save final Apollo Stage 2 v8 trained model (300M steps) with full logs & history")
+                    git_commit_and_push(files_to_sync, "feat(weights): save final Apollo Stage 2 v9 trained model (150M steps) with full logs & history")
                 except Exception as e:
                     print(f"[FINAL CKPT ERROR] {e}", flush=True)
                 return "COMPLETE"
@@ -1166,20 +1165,20 @@ def run_relay():
         has_assignment, is_running = check_and_adopt_assignment(acc)
 
         if has_assignment and is_running:
-            # Verify adopted session is running v8 code (not stale crashed session)
+            # Verify adopted session is running v9 code (not stale crashed session)
             ok_log, log_txt = fetch_remote_train_log(acc)
-            is_v8 = ok_log and log_txt and any(
-                m in log_txt for m in ["v8", "APOLLO HUMANOID", "sigmoid", "linear actor", "log_std"]
+            is_v9 = ok_log and log_txt and any(
+                m in log_txt for m in ["v9", "APOLLO HUMANOID - STAGE 2: NATURAL STAND", "112-dim Base Frame Obs"]
             )
             is_crashed = ok_log and log_txt and any(
                 m in log_txt for m in ["ModuleNotFoundError", "SyntaxError", "AttributeError", "INSTALL_FAILED"]
             )
-            if is_v8 and not is_crashed:
-                print(f"[RELAY] Huấn luyện GPU đang chạy sẵn trên {acc} (v8 xác nhận), gắn trực tiếp vào giám sát!", flush=True)
+            if is_v9 and not is_crashed:
+                print(f"[RELAY] Huấn luyện GPU đang chạy sẵn trên {acc} (v9 xác nhận), gắn trực tiếp vào giám sát!", flush=True)
                 success = True
             else:
-                reason = "crashed/stale" if is_crashed else "not v8 code"
-                print(f"[RELAY] Session {acc} bị lỗi hoặc không phải v8 ({reason}). Killing và redeploy...", flush=True)
+                reason = "crashed/stale" if is_crashed else "not v9 code"
+                print(f"[RELAY] Session {acc} bị lỗi hoặc không phải v9 ({reason}). Killing và redeploy...", flush=True)
                 try:
                     assigns_now = state.client.list_assignments()
                     for a in assigns_now:

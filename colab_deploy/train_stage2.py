@@ -10,10 +10,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--resume", type=str, default="", help="Path to checkpoint .npz file to resume from")
 args = parser.parse_args()
 
-
 print("=" * 64)
-print("  APOLLO HUMANOID - STAGE 2: WALKING (v8)")
-print("  Linear Actor + Sigmoid log_std + Unbounded Gaussian")
+print("  APOLLO HUMANOID - STAGE 2: NATURAL STAND & LOCOMOTION (v9)")
+print("  112-dim Base Frame Obs | Stand-Still Reward | Linear Actor")
 print("=" * 64)
 print("JAX Backend:", jax.default_backend())
 print("Devices:", jax.devices())
@@ -22,29 +21,11 @@ assert jax.default_backend() in ("gpu", "tpu"), "GPU required!"
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_FLAGS", "--xla_gpu_enable_triton_gemm=true --xla_gpu_enable_latency_hiding_scheduler=true")
 
-OBS_DIM_S2 = 114
+OBS_DIM_S2 = 112
 CKPT_DIR   = "/content/checkpoints"
 
 # ================================================================
-# 1. ACTOR-CRITIC — v8: Unbounded Gaussian (industry standard)
-#
-# CRITICAL BUG confirmed in v6/v7 (via weight norm analysis):
-#   Bug A: mean = nn.tanh(Dense(x))
-#     With std=1.66, sampled actions always hit +/-1 clip boundary.
-#     (act - mu) = 0 in PPO loss -> gradient through Dense_3 = 0.
-#     Result: actor output layer COMPLETELY FROZEN (weight diff = 0.00).
-#   Bug B: log_std = jnp.clip(log_std, -3.0, 0.5)
-#     Adam pushes log_std to 0.5068 > 0.5. jnp.clip at boundary
-#     returns gradient = 0. log_std FROZEN at 0.5068 forever.
-#
-# v8 fix (legged_gym / rsl_rl industry standard):
-#   1. Linear actor output (NO tanh) -> Dense_3 gradients always flow.
-#   2. Sigmoid-bounded log_std: -4 + 3*sigmoid(param) -> range [-4,-1].
-#      sigmoid always has gradient -> log_std always trains.
-#      Init param=0 -> log_std=-4+1.5=-2.5 -> std=exp(-2.5)=0.082.
-#   3. Unbounded Gaussian: raw_act = mu + std*noise (no clip!).
-#      log_prob on raw_act -> correct PPO gradient.
-#      clip(raw_act,-1,1) only at environment boundary (not in loss!).
+# 1. ACTOR-CRITIC — Modern Unbounded Gaussian & Linear Actor
 # ================================================================
 class ActorCritic(nn.Module):
     action_dim: int
@@ -54,16 +35,16 @@ class ActorCritic(nn.Module):
         x = obs
         for h in (512, 256, 128):
             x = nn.elu(nn.Dense(h)(x))
-        # v8: LINEAR output — gradients always flow to this layer
-        mean     = nn.Dense(self.action_dim)(x)
-        # v8: sigmoid-bounded log_std — range [-4, -1], always has gradient
+        # Linear actor output: ensures gradients always flow without tanh saturation
+        mean = nn.Dense(self.action_dim)(x)
+        # Sigmoid-bounded log_std: range [-4, -1], std in [0.018, 0.368]
         ls_param = self.param("log_std", nn.initializers.constant(0.0), (self.action_dim,))
         log_std  = -4.0 + 3.0 * nn.sigmoid(ls_param)
         value    = nn.Dense(1)(x).squeeze(-1)
         return mean, log_std, value
 
 # ================================================================
-# 2. PHYSICS MODEL — same as training (SIM_DT=0.002, N_SUBSTEPS=5)
+# 2. PHYSICS MODEL & CONFIGURATION
 # ================================================================
 model_path = "/content/mujoco_menagerie/apptronik_apollo/scene.xml"
 mj_model   = mujoco.MjModel.from_xml_path(model_path)
@@ -81,7 +62,7 @@ for i in range(mj_model.ngeom):
 
 mjx_model = mjx.put_model(mj_model)
 nq, nv, nu = mj_model.nq, mj_model.nv, mj_model.nu
-ctrl_range  = jnp.array(mj_model.actuator_ctrlrange)
+ctrl_range = jnp.array(mj_model.actuator_ctrlrange)
 
 key_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_KEY, "stand")
 if key_id < 0: key_id = 0
@@ -90,74 +71,162 @@ default_ctrl = jnp.array(mj_model.key_qpos[key_id][7:])
 default_pose = jnp.array(mj_model.key_qpos[key_id][7:])
 
 Z_NOMINAL    = float(default_qpos[2])       # ~1.016m standing height
-ACTION_SCALE = 0.25
-EPISODE_LEN  = 500                           # 5s per episode at 100Hz
-# v8 STRICT termination thresholds (v6/v7 used 0.50 and cos(63deg)=0.45 — too lenient)
-TERM_HEIGHT  = Z_NOMINAL * 0.75             # 0.762m — fall if below 76.2cm
-TERM_TILT    = 0.906                         # cos(25deg) — fall if tilt > 25deg
+ACTION_SCALE = 0.15                         # Smooth 0.15 rad (8.6 deg) control
+EPISODE_LEN  = 500                          # 5s per episode at 100Hz
+TERM_HEIGHT  = Z_NOMINAL * 0.75             # 0.762m
+TERM_TILT    = -0.85                        # cos(31.8 deg) projection along gravity (-z)
 
-STEP_FREQ   = 1.2
-STANCE_DUTY = 0.55
+STEP_FREQ   = 1.2                           # Gait frequency (Hz)
+STANCE_DUTY = 0.55                          # Stance ratio per foot
+
 L_FOOT_SITE_ID = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, "l_foot_fl")
 R_FOOT_SITE_ID = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, "r_foot_fl")
-CONTACT_Z_THR  = 0.08
+CONTACT_Z_THR  = 0.05
 
-print(f"z_nominal={Z_NOMINAL:.4f}m | TERM_HEIGHT={TERM_HEIGHT:.3f}m | TERM_TILT=cos(25deg)={TERM_TILT}")
-print(f"action_scale={ACTION_SCALE} | CTRL_DT={CTRL_DT}s | step_freq={STEP_FREQ}Hz")
-
-# ================================================================
-# 3. NETWORK INIT — from scratch (NO Stage 1 transfer)
-# ================================================================
-network = ActorCritic(action_dim=nu)
-rng     = jax.random.PRNGKey(42)
-rng, ri = jax.random.split(rng)
-params  = network.init(ri, jnp.zeros((1, OBS_DIM_S2)))
-print(f"[v8] Training from scratch | log_std init: {-4.0+3.0*0.5:.3f} (std={math.exp(-4.0+3.0*0.5):.3f})")
+print(f"z_nominal={Z_NOMINAL:.4f}m | TERM_HEIGHT={TERM_HEIGHT:.3f}m | ACTION_SCALE={ACTION_SCALE}")
+print(f"OBS_DIM={OBS_DIM_S2} | CTRL_DT={CTRL_DT}s | step_freq={STEP_FREQ}Hz")
 
 # ================================================================
-# 4. ENVIRONMENT — reset, step, observations
+# 3. QUATERNION MATH & OBSERVATION (Local Base Frame)
 # ================================================================
-def get_upvector(qpos):
-    qw, qx, qy, qz = qpos[3], qpos[4], qpos[5], qpos[6]
-    return jnp.array([2.0*(qx*qz+qw*qy), 2.0*(qy*qz-qw*qx), 1.0-2.0*(qx**2+qy**2)])
+def quat_rotate_inverse(q, v):
+    """Rotates a 3D vector v by the inverse of quaternion q (MuJoCo format [w, x, y, z])."""
+    q_w = q[0]
+    q_vec = -q[1:4]
+    a = v * (2.0 * q_w**2 - 1.0)
+    b = jnp.cross(q_vec, v) * q_w * 2.0
+    c = q_vec * jnp.dot(q_vec, v) * 2.0
+    return a + b + c
 
 def get_obs(d, prev_act, cmd_vel, phase):
-    upvec = get_upvector(d.qpos)
-    phi_l = 2.0*math.pi*phase; phi_r = 2.0*math.pi*((phase+0.5)%1.0)
-    gait_phase  = jnp.array([jnp.sin(phi_l), jnp.cos(phi_l), jnp.sin(phi_r), jnp.cos(phi_r)])
-    l_z = d.site_xpos[L_FOOT_SITE_ID, 2]; r_z = d.site_xpos[R_FOOT_SITE_ID, 2]
-    foot_contact = jnp.array([(l_z<CONTACT_Z_THR).astype(jnp.float32),
-                               (r_z<CONTACT_Z_THR).astype(jnp.float32)])
-    obs = jnp.concatenate([upvec, d.qvel[:3], d.qvel[3:6],
-                           d.qpos[7:7+nu]-default_pose, d.qvel[6:6+nu],
-                           prev_act, cmd_vel, gait_phase, foot_contact])
+    """
+    112-dim observation space in robot's local base coordinate frame:
+      - projected_gravity (3): [0, 0, -1] rotated into base frame
+      - base_lin_vel (3): linear velocity in base frame
+      - base_ang_vel (3): angular velocity in base frame
+      - joint_pos (32): joint angles relative to default standing pose
+      - joint_vel (32): joint angular velocities
+      - prev_act (32): previous network action
+      - cmd_vel (3): commanded velocities [vx, vy, yaw_rate]
+      - gait_phase (4): [sin(phi_L), cos(phi_L), sin(phi_R), cos(phi_R)]
+    """
+    base_quat = d.qpos[3:7]
+    proj_grav = quat_rotate_inverse(base_quat, jnp.array([0.0, 0.0, -1.0]))
+    base_lin_vel = quat_rotate_inverse(base_quat, d.qvel[:3])
+    base_ang_vel = quat_rotate_inverse(base_quat, d.qvel[3:6])
+
+    phi_l = 2.0 * math.pi * phase
+    phi_r = 2.0 * math.pi * ((phase + 0.5) % 1.0)
+    gait_phase = jnp.array([jnp.sin(phi_l), jnp.cos(phi_l), jnp.sin(phi_r), jnp.cos(phi_r)])
+
+    obs = jnp.concatenate([
+        proj_grav,
+        base_lin_vel,
+        base_ang_vel,
+        d.qpos[7:7+nu] - default_pose,
+        d.qvel[6:6+nu],
+        prev_act,
+        cmd_vel,
+        gait_phase
+    ])
     return jnp.clip(obs, -20.0, 20.0)
 
+# ================================================================
+# 4. ENVIRONMENT STEP & RESET
+# ================================================================
 def env_reset(rng):
-    rng_q, rng_v, rng_j, rng_cmd, rng_phase = jax.random.split(rng, 5)
-    noise = jax.random.uniform(rng_j, (nq-7,), minval=-0.05, maxval=0.05)
+    rng_q, rng_v, rng_j, rng_mode, rng_cmd, rng_phase = jax.random.split(rng, 6)
+    noise = jax.random.uniform(rng_j, (nq-7,), minval=-0.02, maxval=0.02)
     qpos  = jnp.concatenate([
-        default_qpos[:7] + jax.random.uniform(rng_q, (7,), minval=-0.01, maxval=0.01),
+        default_qpos[:7] + jax.random.uniform(rng_q, (7,), minval=-0.005, maxval=0.005),
         default_qpos[7:] + noise
     ])
-    dv = jax.random.uniform(rng_v, (nv,), minval=-0.05, maxval=0.05)
+    dv = jax.random.uniform(rng_v, (nv,), minval=-0.02, maxval=0.02)
     d  = mjx.make_data(mjx_model)
     d  = d.replace(qpos=qpos, qvel=dv)
     d  = mjx.forward(mjx_model, d)
-    # v8: cmd_vel starts from 0 (curriculum will expand range later)
-    cmd_vel = jax.random.uniform(
+
+    # 35% probability of zero velocity (Pure Stand-Still Balance training)
+    # 65% probability of walking velocity command
+    is_stand_mode = jax.random.bernoulli(rng_mode, p=0.35)
+    walk_cmd = jax.random.uniform(
         rng_cmd, (3,),
-        minval=jnp.array([0.0,  -0.20, -0.30]),
-        maxval=jnp.array([0.25,  0.20,  0.30]),
+        minval=jnp.array([0.10, -0.15, -0.30]),
+        maxval=jnp.array([0.50,  0.15,  0.30]),
     )
+    cmd_vel = jnp.where(is_stand_mode, jnp.zeros(3), walk_cmd)
+
     phase = jax.random.uniform(rng_phase, (), minval=0.0, maxval=1.0)
     return {
         "d": d, "prev_act": jnp.zeros(nu), "step": jnp.zeros((), jnp.int32),
         "phase": phase, "cmd_vel": cmd_vel,
     }
 
+def compute_reward(d, action, prev_action, cmd_vel, phase):
+    qpos = d.qpos
+    qvel = d.qvel
+    base_quat = qpos[3:7]
+
+    proj_grav = quat_rotate_inverse(base_quat, jnp.array([0.0, 0.0, -1.0]))
+    base_lin_vel = quat_rotate_inverse(base_quat, qvel[:3])
+    base_ang_vel = quat_rotate_inverse(base_quat, qvel[3:6])
+
+    cmd_norm = jnp.linalg.norm(cmd_vel[:2])
+    is_standing = jnp.where(cmd_norm < 0.05, 1.0, 0.0)
+    is_walking  = 1.0 - is_standing
+
+    # 1. Stand-Still Reward (Natural Balance when cmd_vel == 0)
+    joint_dev = jnp.sum(jnp.square(qpos[7:7+nu] - default_pose))
+    r_stand_pose = jnp.exp(-joint_dev / 0.10) * 3.0 * is_standing
+    r_stand_vel  = jnp.exp(-jnp.sum(jnp.square(base_lin_vel[:2])) / 0.05) * 2.0 * is_standing
+
+    # 2. Velocity Tracking in Robot Base Frame (Locomotion)
+    vx_err = base_lin_vel[0] - cmd_vel[0]
+    vy_err = base_lin_vel[1] - cmd_vel[1]
+    # Asymmetric: linear brake penalty if exceeding commanded speed, exp reward if matching
+    r_track_vx = jnp.where(
+        vx_err > 0.1,
+        jnp.exp(-jnp.square(vx_err) / 0.09) * 1.5,
+        jnp.exp(-jnp.square(vx_err) / 0.15) * 2.5
+    ) * is_walking
+    r_track_vy  = jnp.exp(-jnp.square(vy_err) / 0.15) * 1.0 * is_walking
+    r_track_yaw = jnp.exp(-jnp.square(base_ang_vel[2] - cmd_vel[2]) / 0.15) * 1.0
+
+    # 3. Posture & Height (Active in all modes)
+    r_upright = jnp.exp(-jnp.sum(jnp.square(proj_grav[:2])) / 0.04) * 2.0
+    r_height  = jnp.exp(-jnp.square(qpos[2] - Z_NOMINAL) / 0.02) * 2.0
+    r_alive   = 1.0
+
+    # 4. Alternating Bipedal Gait Coordination (Active only when walking)
+    l_z = d.site_xpos[L_FOOT_SITE_ID, 2]
+    r_z = d.site_xpos[R_FOOT_SITE_ID, 2]
+    l_c = jnp.where(l_z < CONTACT_Z_THR, 1.0, 0.0)
+    r_c = jnp.where(r_z < CONTACT_Z_THR, 1.0, 0.0)
+    l_stance = jnp.where(phase < STANCE_DUTY, 1.0, 0.0)
+    r_stance = jnp.where(((phase + 0.5) % 1.0) < STANCE_DUTY, 1.0, 0.0)
+    r_gait = (jnp.where(l_stance > 0.5, l_c, 1.0 - l_c) + jnp.where(r_stance > 0.5, r_c, 1.0 - r_c)) * 1.5 * is_walking
+
+    # 5. Feet Air Time / Swing Clearance (Prevents foot dragging)
+    swing_clearance = (
+        jnp.where((1.0 - l_stance) > 0.5, jnp.clip(l_z - 0.03, 0.0, 0.1), 0.0) +
+        jnp.where((1.0 - r_stance) > 0.5, jnp.clip(r_z - 0.03, 0.0, 0.1), 0.0)
+    ) * 1.0 * is_walking
+
+    # 6. Smoothness & Energy Penalties
+    p_action_rate = jnp.sum(jnp.square(action - prev_action)) * 0.05
+    p_torque      = jnp.sum(jnp.square(action)) * 0.01
+    p_pitch_roll  = (jnp.square(base_ang_vel[0]) + jnp.square(base_ang_vel[1])) * 0.05
+
+    total = (
+        r_stand_pose + r_stand_vel +
+        r_track_vx + r_track_vy + r_track_yaw +
+        r_upright + r_height + r_alive +
+        r_gait + swing_clearance -
+        p_action_rate - p_torque - p_pitch_roll
+    )
+    return total * CTRL_DT
+
 def env_step(state, action_and_rng):
-    # action_and_rng[0] is env_act (CLIPPED for physics safety)
     env_act, rng_reset = action_and_rng
     d, prev_act, step, phase, cmd_vel = (
         state["d"], state["prev_act"], state["step"],
@@ -170,18 +239,17 @@ def env_step(state, action_and_rng):
     d, _ = jax.lax.scan(_sub, d, None, length=N_SUBSTEPS)
 
     new_phase = (phase + CTRL_DT * STEP_FREQ) % 1.0
-
-    rew, done_bonus = compute_reward(d, env_act, prev_act, cmd_vel, phase)
+    rew = compute_reward(d, env_act, prev_act, cmd_vel, phase)
     obs_out = get_obs(d, env_act, cmd_vel, new_phase)
 
-    upvec      = get_upvector(d.qpos)
-    # v8 STRICT termination: tilt > 25deg OR pelvis < 76.2cm
-    terminated = jnp.logical_or(upvec[2] < TERM_TILT, d.qpos[2] < TERM_HEIGHT)
+    # Termination: pelvic height or tilt angle
+    base_quat = d.qpos[3:7]
+    proj_grav = quat_rotate_inverse(base_quat, jnp.array([0.0, 0.0, -1.0]))
+    terminated = jnp.logical_or(proj_grav[2] > TERM_TILT, d.qpos[2] < TERM_HEIGHT)
     step_new   = step + 1
     truncated  = step_new >= EPISODE_LEN
     done       = jnp.logical_or(terminated, truncated)
 
-    # v8: termination penalty — robot learns falling is bad
     total_rew = rew + jnp.where(terminated, -5.0 * CTRL_DT, 0.0)
 
     reset_state = env_reset(rng_reset)
@@ -196,97 +264,34 @@ def env_step(state, action_and_rng):
     return obs_out, nst, total_rew, terminated, truncated
 
 # ================================================================
-# 5. REWARD FUNCTION — v8: Asymmetric velocity + strict termination
-#
-# v6/v7 failures (confirmed by simulation):
-#   - Symmetric exp(-|v-cmd|^2) has ~0 gradient when overshoot is large
-#   - Robot learned to lean forward (gravity = free energy) to get vel reward
-#   - cmd=0.3 -> actual 1.57 m/s in 1.3s -> ALWAYS falls
-#   - TERM_TILT=cos(63deg) too lenient -> falling forward was profitable!
-#
-# v8 fixes:
-#   1. ASYMMETRIC: overshoot -> LINEAR penalty (-2*error), LARGE gradient!
-#      undershoot -> EXP reward (smooth encouragement)
-#   2. Explicit PITCH penalty: 3*upvec[1]^2 — directly penalize forward lean
-#   3. TERM_TILT=cos(25deg)=0.906 — robot CANNOT lean 25deg without reset
+# 5. NETWORK INITIALIZATION
 # ================================================================
-_VEL_SIGMA   = 0.15   # Tight sigma (tighter = more precise tracking required)
-_PENALTY_SCL = 0.20   # Start low, increases to 1.0 over 100M steps
-_ENT_COEF    = 0.01   # Decays to 0.001 over 50M steps
-
-def compute_reward(d, action, prev_action, cmd_vel, phase):
-    qpos  = d.qpos
-    qvel  = d.qvel
-    upvec = get_upvector(qpos)
-
-    # Asymmetric velocity tracking (primary signal)
-    vx_error = qvel[0] - cmd_vel[0]   # positive = faster than commanded
-    vy_error = qvel[1] - cmd_vel[1]
-    vel_sigma = jnp.float32(_VEL_SIGMA)
-    r_vel_x = jnp.where(
-        vx_error > 0,
-        -2.0 * vx_error,                              # LINEAR penalty for overshoot
-        jnp.exp(-jnp.square(vx_error) / vel_sigma)   # EXP reward for undershoot
-    )
-    r_vel_y   = jnp.exp(-jnp.square(vy_error) / vel_sigma)
-    r_vel_ang = jnp.exp(-jnp.square(qvel[5] - cmd_vel[2]) / vel_sigma)
-
-    # Orientation: upright body
-    r_orient = jnp.exp(-jnp.sum(jnp.square(upvec[:2])) / 0.10)
-
-    # Height: keep pelvis near nominal
-    r_height = jnp.exp(-jnp.square(qpos[2] - Z_NOMINAL) / 0.10)
-
-    # Alive reward: large — prevents robot from preferring early death
-    r_alive = 1.0
-
-    # Gait phase matching
-    l_z = d.site_xpos[L_FOOT_SITE_ID, 2]; r_z = d.site_xpos[R_FOOT_SITE_ID, 2]
-    l_c = (l_z < CONTACT_Z_THR).astype(jnp.float32)
-    r_c = (r_z < CONTACT_Z_THR).astype(jnp.float32)
-    l_ts = (phase < STANCE_DUTY).astype(jnp.float32)
-    rp   = (phase + 0.5) % 1.0
-    r_ts = (rp < STANCE_DUTY).astype(jnp.float32)
-    r_gait = (jnp.where(l_ts > 0.5, l_c, 1. - l_c) + jnp.where(r_ts > 0.5, r_c, 1. - r_c)) * 0.3
-
-    # Penalties (scaled by _PENALTY_SCL, increases over training)
-    pen_scl   = jnp.float32(_PENALTY_SCL)
-    p_ar      = pen_scl * 0.02 * jnp.mean(jnp.square(action - prev_action))
-    p_torque  = pen_scl * 2e-4 * jnp.sum(jnp.square(action))
-    p_base_tw = pen_scl * 0.05 * (jnp.square(qvel[3]) + jnp.square(qvel[4]))
-    # v8: EXPLICIT pitch penalty — directly penalizes forward lean (anti-runaway)
-    p_pitch   = pen_scl * 3.0 * jnp.square(upvec[1])
-
-    total = (r_vel_x * 5.0 + r_vel_y * 1.0 + r_vel_ang * 0.5
-             + r_orient * 0.5 + r_height * 0.3
-             + r_alive + r_gait
-             - p_ar - p_torque - p_base_tw - p_pitch)
-
-    return total * CTRL_DT, 0.0   # (reward, done_bonus — done_bonus added in env_step)
+network = ActorCritic(action_dim=nu)
+rng     = jax.random.PRNGKey(42)
+rng, ri = jax.random.split(rng)
+params  = network.init(ri, jnp.zeros((1, OBS_DIM_S2)))
 
 # ================================================================
-# 6. PPO HYPERPARAMETERS — v8
+# 6. PPO HYPERPARAMETERS (State-of-the-Art Locomotion)
 # ================================================================
 NUM_ENVS     = 4096
-ROLLOUT      = 24       # Short horizon optimal for MJX locomotion
+ROLLOUT      = 24
 GAMMA        = 0.99
 LAM          = 0.95
 CLIP_EPS     = 0.2
 ENT_COEF     = 0.01
 VF_COEF      = 0.5
-MAX_GRAD     = 0.5      # Tighter clip for unbounded Gaussian stability
+MAX_GRAD     = 0.5
 N_EPOCHS     = 4
 MINIBATCH    = 4096
-KL_TARGET    = 0.02
-TOTAL_STEPS  = 300_000_000
+TOTAL_STEPS  = 150_000_000
 STEPS_PER_IT = NUM_ENVS * ROLLOUT   # 4096 x 24 = 98,304
 N_ITERS      = TOTAL_STEPS // STEPS_PER_IT
 
-print(f"[v8 CONFIG] ROLLOUT={ROLLOUT} | STEPS_PER_IT={STEPS_PER_IT:,} | N_ITERS={N_ITERS}")
-print(f"[v8 CONFIG] LINEAR actor | sigmoid log_std | unbounded Gaussian | MAX_GRAD={MAX_GRAD}")
-print(f"[v8 CONFIG] ENT_COEF=0.01->0.001 | PENALTY_SCL=0.20->1.00 | TOTAL={TOTAL_STEPS:,} steps")
+print(f"[v9 CONFIG] Envs={NUM_ENVS} | Rollout={ROLLOUT} | Steps/iter={STEPS_PER_IT:,} | Total iters={N_ITERS}")
+print(f"[v9 CONFIG] Obs={OBS_DIM_S2} | ActionScale={ACTION_SCALE} | Total steps={TOTAL_STEPS:,}")
 
-lr_schedule = optax.cosine_decay_schedule(1e-3, N_ITERS, alpha=0.1)   # 1e-3 -> 1e-4
+lr_schedule = optax.cosine_decay_schedule(1e-3, N_ITERS, alpha=0.1)
 tx          = optax.chain(optax.clip_by_global_norm(MAX_GRAD),
                           optax.adam(lr_schedule, eps=1e-5))
 opt_state   = tx.init(params)
@@ -303,13 +308,13 @@ if args.resume and os.path.exists(args.resume):
         cur = int(ck_data["_step"])
     if "_it" in ck_data:
         start_it = int(ck_data["_it"])
-    print(f"[RESUME] Restored step={cur}, it={start_it}", flush=True)
+    print(f"[RESUME] Restored step={cur:,}, it={start_it}", flush=True)
 
 rng_envs = jax.random.split(rng, NUM_ENVS)
 states   = jax.vmap(env_reset)(rng_envs)
 
 # ================================================================
-# 7. ROLLOUT + PPO UPDATE
+# 7. ROLLOUT & PPO TRAINING LOGIC
 # ================================================================
 @jax.jit
 def collect_rollout(params, states, rng):
@@ -320,19 +325,15 @@ def collect_rollout(params, states, rng):
         obs  = jax.vmap(lambda s: get_obs(s["d"], s["prev_act"], s["cmd_vel"], s["phase"]))(st)
         mu, ls, val = network.apply(p, obs)
         std  = jnp.exp(ls)
-        # v8 FIX: raw Gaussian sample — unbounded, used for log_prob
-        raw_act  = mu + std * jax.random.normal(ra, mu.shape)
+        raw_act = mu + std * jax.random.normal(ra, mu.shape)
         lp   = jnp.clip(-0.5 * jnp.sum(
             jnp.square((raw_act - mu) / (std + 1e-8)) +
             2.0 * ls + math.log(2.0 * math.pi), axis=-1), -10., 10.)
-        # v8 FIX: clip only for environment (physics safety), NOT for loss
         env_act = jnp.clip(raw_act, -1., 1.)
         _, nst, rew, term, trunc = jax.vmap(env_step)(st, (env_act, r_resets))
-        # Store raw_act in buffer for correct PPO gradient signal
         return (nst, p, r), (obs, raw_act, lp, val, rew, term, trunc)
 
-    (fst, _, rng), traj = jax.lax.scan(
-        _step, (states, params, rng), None, length=ROLLOUT)
+    (fst, _, rng), traj = jax.lax.scan(_step, (states, params, rng), None, length=ROLLOUT)
     obs, act, old_lp, vals, rews, terms, truncs = traj
 
     lobs = jax.vmap(lambda s: get_obs(s["d"], s["prev_act"], s["cmd_vel"], s["phase"]))(fst)
@@ -345,8 +346,7 @@ def collect_rollout(params, states, rng):
         gae   = delta + GAMMA * LAM * (1. - done.astype(jnp.float32)) * gae
         return (gae, vals[t]), gae
 
-    _, advs = jax.lax.scan(_gae, (jnp.zeros(NUM_ENVS), nv_last),
-                            jnp.arange(ROLLOUT - 1, -1, -1))
+    _, advs = jax.lax.scan(_gae, (jnp.zeros(NUM_ENVS), nv_last), jnp.arange(ROLLOUT - 1, -1, -1))
     advs  = jnp.flip(advs, axis=0)
     rets  = advs + vals
     advs  = (advs - advs.mean()) / (advs.std() + 1e-8)
@@ -360,7 +360,6 @@ def ppo_minibatch_update(params, opt_state, fo_mb, fa_mb, flp_mb, fadv_mb, fret_
     def loss_fn(p):
         mu, ls, v = network.apply(p, fo_mb)
         std = jnp.exp(ls)
-        # log_prob on raw action (fa_mb is raw_act, not clipped)
         lp  = jnp.clip(-0.5 * jnp.sum(jnp.square((fa_mb - mu) / (std + 1e-8)) +
                         2.0 * ls + math.log(2.0 * math.pi), axis=-1), -10., 10.)
         ratio = jnp.exp(jnp.clip(lp - flp_mb, -5., 5.))
@@ -380,126 +379,64 @@ def ppo_minibatch_update(params, opt_state, fo_mb, fa_mb, flp_mb, fadv_mb, fret_
     return optax.apply_updates(params, upd), opt_state, loss, approx_kl
 
 # ================================================================
-# 8. TRAINING LOOP
+# 8. MAIN TRAINING LOOP
 # ================================================================
 os.makedirs(CKPT_DIR, exist_ok=True)
+print(f"Starting training loop at {time.strftime('%Y-%m-%d %H:%M:%S')}...", flush=True)
+
 t0 = time.time()
-
-WALK_THRESHOLD      = 0.020
-WALK_WELL_THRESHOLD = 0.040
-
-print(f"\nAPOLLO HUMANOID - STAGE 2 v8 (LINEAR ACTOR + SIGMOID LOG_STD)")
-print(f"Steps/iter={STEPS_PER_IT:,} | N_iters={N_ITERS} | ROLLOUT={ROLLOUT}")
-print("=" * 64)
-
-# Curriculum: cmd_vel range grows as robot learns
-CURR_P0 = 30_000_000; CURR_P1 = 100_000_000; CURR_P2 = 200_000_000
-
-def get_curriculum_vx_max(n_steps):
-    if n_steps < CURR_P0: return 0.25
-    elif n_steps < CURR_P1:
-        t = (n_steps - CURR_P0) / (CURR_P1 - CURR_P0); return 0.25 + t * (0.55 - 0.25)
-    elif n_steps < CURR_P2:
-        t = (n_steps - CURR_P1) / (CURR_P2 - CURR_P1); return 0.55 + t * (0.85 - 0.55)
-    else: return 1.20
-
-@jax.jit
-def reseed_cmd_vel(states, rng, vx_max, vy_max, yaw_max):
-    rngs = jax.random.split(rng, NUM_ENVS)
-    def _new_cmd(r):
-        return jax.random.uniform(r, (3,),
-            minval=jnp.array([0.0,  -vy_max, -yaw_max]),
-            maxval=jnp.array([vx_max, vy_max,  yaw_max]))
-    return {**states, "cmd_vel": jax.vmap(_new_cmd)(rngs)}
-
-import numpy as np_host
+cur_ent = ENT_COEF
 
 for it in range(start_it, N_ITERS + 1):
-    t1 = time.time()
-
-    # Adaptive parameters (host-side, outside jit) — update module-level vars
-    ent_t        = min(1.0, cur / 50_000_000)
-    _ENT_COEF    = 0.01 - ent_t * (0.01 - 0.001)    # 0.01 -> 0.001
-    pen_t        = min(1.0, cur / 100_000_000)
-    _PENALTY_SCL = 0.20 + pen_t * (1.0  - 0.20)     # 0.20 -> 1.00
-
-    if it % 20 == 1:
-        vx_max_cur  = get_curriculum_vx_max(cur)
-        vy_max_cur  = min(0.3, vx_max_cur * 0.4)
-        yaw_max_cur = min(0.5, vx_max_cur * 0.5)
-        rng, rng_seed = jax.random.split(rng)
-        states = reseed_cmd_vel(states, rng_seed,
-                                jnp.float32(vx_max_cur),
-                                jnp.float32(vy_max_cur),
-                                jnp.float32(yaw_max_cur))
-
-    states, rng, fo, fa, flp, fadv, fret, ovf, mr = \
-        collect_rollout(params, states, rng)
-    jax.block_until_ready(fo)
-
-    N_SAMPLES  = fo.shape[0]
-    N_MB       = N_SAMPLES // MINIBATCH
-    last_loss  = 0.0; kl_stopped = False
-    ent_coef_j = jnp.float32(_ENT_COEF)
-
-    for epoch in range(N_EPOCHS):
-        if kl_stopped: break
-        perm = np_host.random.permutation(N_SAMPLES)
-        for mb_idx in range(N_MB):
-            idx   = perm[mb_idx * MINIBATCH:(mb_idx + 1) * MINIBATCH]
-            idx_j = jnp.array(idx)
-            params, opt_state, last_loss, approx_kl = ppo_minibatch_update(
-                params, opt_state,
-                fo[idx_j], fa[idx_j], flp[idx_j],
-                fadv[idx_j], fret[idx_j], ovf[idx_j],
-                ent_coef_j
-            )
-            if float(approx_kl) > KL_TARGET:
-                kl_stopped = True; break
-
-    jax.block_until_ready(params)
     cur += STEPS_PER_IT
-    sps = STEPS_PER_IT / max(1e-5, time.time() - t1)
 
-    if it % 10 == 0 or it <= 5:
-        r_val    = float(mr)
-        vx_max_p = get_curriculum_vx_max(cur)
+    # Entropy coefficient decay over first 50M steps
+    progress_50m = min(1.0, cur / 50_000_000)
+    cur_ent = float(ENT_COEF * (1.0 - 0.9 * progress_50m))
 
-        # Read log_std to monitor learning progress (key diagnostic)
-        ls_flat = flax.traverse_util.flatten_dict(params, sep="/").get("params/log_std", None)
-        ls_mean = float(jnp.mean(-4.0 + 3.0 * nn.sigmoid(ls_flat))) if ls_flat is not None else float("nan")
+    t_it = time.time()
+    states, rng, fo, fa, flp, fadv, fret, ovf, mean_rew = collect_rollout(params, states, rng)
 
-        if r_val > WALK_WELL_THRESHOLD: status = "*** WALKING WELL ***"
-        elif r_val > WALK_THRESHOLD:    status = "*** WALKING ***"
-        elif r_val > 0.015:             status = "stepping"
-        elif r_val > 0.010:             status = "improving"
-        else:                           status = "..."
+    n_samples = STEPS_PER_IT
+    n_batches = n_samples // MINIBATCH
+    perm_rng, rng = jax.random.split(rng)
 
-        print(f"[{it:04d}/{N_ITERS}] steps={cur:,} | "
-              f"rew={r_val:.5f} | loss={float(last_loss):.4f} | "
-              f"sps={sps:,.0f} | vx_max={vx_max_p:.2f} | "
-              f"ent={float(_ENT_COEF):.4f} | log_std={ls_mean:.3f} | "
-              f"t={time.time()-t0:.0f}s {status}", flush=True)
+    tot_loss, tot_kl = 0.0, 0.0
+    for _ in range(N_EPOCHS):
+        perm = jax.random.permutation(perm_rng, n_samples)
+        for b in range(n_batches):
+            idx = perm[b * MINIBATCH : (b + 1) * MINIBATCH]
+            params, opt_state, loss, kl = ppo_minibatch_update(
+                params, opt_state,
+                fo[idx], fa[idx], flp[idx], fadv[idx], fret[idx], ovf[idx],
+                cur_ent
+            )
+            tot_loss += float(loss)
+            tot_kl   += float(kl)
 
-    if it % 300 == 0 or it == N_ITERS:
-        ck = f"{CKPT_DIR}/apollo_stage2_v8_step_{cur}.npz"
+    sps = STEPS_PER_IT / max(time.time() - t_it, 1e-4)
+    ls_mean = float(jnp.mean(network.apply(params, fo[:1])[1]))
+
+    status = "*** BALANCED WALKING ***" if mean_rew > 0.08 else ("stepping" if mean_rew > 0.04 else "...")
+    print(f"[{it:04d}/{N_ITERS}] steps={cur:,} | rew={mean_rew:.5f} | "
+          f"loss={tot_loss/(N_EPOCHS*n_batches):.4f} | sps={sps:,.0f} | "
+          f"ent={cur_ent:.4f} | log_std={ls_mean:.3f} | "
+          f"t={time.time()-t0:.0f}s {status}", flush=True)
+
+    # Save checkpoint every 100 iters (~10M steps) or final
+    if it % 100 == 0 or it == N_ITERS:
+        ck = f"{CKPT_DIR}/apollo_stage2_v9_step_{cur}.npz"
         flat_np = {k: np.array(v) for k, v in flax.traverse_util.flatten_dict(params, sep="/").items()}
         flat_np["_step"] = np.array(cur)
         flat_np["_it"]   = np.array(it)
         np.savez(ck, **flat_np)
-        ck_size = os.path.getsize(ck)
-        if ck_size < 100_000:
-            print(f"  [WARNING] Checkpoint small: {ck_size} bytes!", flush=True)
-        else:
-            print(f"  -> checkpoint: {ck} ({ck_size//1024}KB)", flush=True)
 
-        # Always create _latest.npz locally for relay HTTP sync (independent of GitHub)
-        latest_ck = f"{CKPT_DIR}/apollo_stage2_v8_latest.npz"
+        latest_ck = f"{CKPT_DIR}/apollo_stage2_v9_latest.npz"
         import shutil as _shutil
         _shutil.copy(ck, latest_ck)
-        print(f"  -> latest: {latest_ck}", flush=True)
+        print(f"  -> saved latest checkpoint: {latest_ck}", flush=True)
 
-        # Push checkpoint to GitHub via REST API (no git clone needed)
+        # Push checkpoint to GitHub via REST API
         gh_token = ""
         token_file = "/content/github_token.txt"
         if os.path.exists(token_file):
@@ -515,7 +452,7 @@ for it in range(start_it, N_ITERS + 1):
             try:
                 import base64, urllib.request, json as _json
                 repo = "tranvanmanh9325/medical-science"
-                api_path = "colab_output/checkpoints_stage2/apollo_stage2_v8_latest.npz"
+                api_path = "colab_output/checkpoints_stage2/apollo_stage2_v9_latest.npz"
                 api_url = f"https://api.github.com/repos/{repo}/contents/{api_path}"
                 with open(latest_ck, "rb") as f:
                     ck_b64 = base64.b64encode(f.read()).decode()
@@ -526,7 +463,7 @@ for it in range(start_it, N_ITERS + 1):
                         sha = _json.loads(r.read())["sha"]
                 except Exception:
                     pass
-                payload = {"message": f"[skip ci] checkpoint step={cur} it={it}", "content": ck_b64, "branch": "main"}
+                payload = {"message": f"[skip ci] sync v9 checkpoint step={cur} it={it}", "content": ck_b64, "branch": "main"}
                 if sha:
                     payload["sha"] = sha
                 req_put = urllib.request.Request(
@@ -537,16 +474,14 @@ for it in range(start_it, N_ITERS + 1):
                 )
                 with urllib.request.urlopen(req_put, timeout=120) as r:
                     r.read()
-                print(f"  -> GitHub REST API push OK (step={cur})", flush=True)
+                print(f"  -> GitHub REST API push OK (step={cur:,})", flush=True)
             except Exception as e:
                 print(f"  [WARN] GitHub push failed: {e}", flush=True)
-        else:
-            print("  [WARN] No GITHUB_TOKEN — skipping GitHub push", flush=True)
 
-# Final checkpoint
+# Final checkpoint save
 flat_np = {k: np.array(v) for k, v in flax.traverse_util.flatten_dict(params, sep="/").items()}
 flat_np["_step"] = np.array(cur)
 flat_np["_it"]   = np.array(it)
-np.savez(f"{CKPT_DIR}/apollo_stage2_v8_final.npz", **flat_np)
-print("\nSTAGE 2 v8 TRAINING COMPLETE! (Linear Actor + Sigmoid log_std)", flush=True)
-print(f"Total steps: {cur:,} | Checkpoint: {CKPT_DIR}/apollo_stage2_v8_final.npz", flush=True)
+np.savez(f"{CKPT_DIR}/apollo_stage2_v9_final.npz", **flat_np)
+print("\nSTAGE 2 v9 TRAINING COMPLETE! (Natural Stand & Locomotion)", flush=True)
+print(f"Total steps: {cur:,} | Final Checkpoint: {CKPT_DIR}/apollo_stage2_v9_final.npz", flush=True)
