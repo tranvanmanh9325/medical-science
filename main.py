@@ -2145,8 +2145,15 @@ class BlenderMuJoCoViewer:
             # Atomic write: ghi thẳng (Windows không cần .tmp nếu không có concurrent reader)
             with open(self._ipc_status_file, 'w', encoding='utf-8') as f:
                 json.dump(status, f)
-        except Exception:
-            pass
+        except Exception as _ipc_e:
+            try:
+                import traceback
+                err_path = self._ipc_status_file.replace('sim_status.json', 'sim_status_error.txt')
+                with open(err_path, 'w') as _ef:
+                    _ef.write(f"{type(_ipc_e).__name__}: {_ipc_e}\n")
+                    traceback.print_exc(file=_ef)
+            except Exception:
+                pass
 
     def _ipc_capture_screenshot(self):
         """Chụp OpenGL framebuffer → PNG. Được gọi từ render loop sau swap_buffers."""
